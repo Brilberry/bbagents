@@ -38,14 +38,17 @@ by the book. The following gaps need explicit design before production use:
 - TaskLifecycle now persists task progress, acceptance evidence and measured budgets.
   HookRunner provides bounded traced boundaries; application/orchestrator code owns
   scheduling, budget measurement and recovery against the actual environment.
-- `SkillSource` is a contract, not an Agent Skills filesystem parser or permission
-  engine. The host verifies scope, revision, owner, and provenance before loading.
+- FilesystemSkillSource parses reviewed SKILL.md files with optional PyYAML, verifies
+  scope, digest and path containment, and authorizes resources separately. Hosts
+  supply trusted manifests and identity; scripts remain subject to execution policy.
 - Evaluation records and reports are implemented; dataset execution, environment
   reset, held-out case selection, judge calibration, and statistical confidence
   estimation remain application responsibilities. Unknown grades count as trials
   without demonstrated success in the empirical success rate.
-- Summary source records preserve attribution but do not prove summary fidelity or
-  enforce trust. Memory access and provenance labels also require host policies.
+- ScopedMemoryStore and RevisionRepository enforce host-defined access before
+  ranking and retain revision/activation history. ProcedurePromoter records validation
+  and rollback. Provenance labels still require trustworthy host assignment;
+  source records alone cannot prove summary fidelity.
 - SQLiteStateStore now supplies transactional version checks across competing
   writers. FileStateStore uses unique temporary files and failure cleanup, but
   remains a single-writer reference backend.

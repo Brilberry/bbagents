@@ -10,7 +10,8 @@ Each phase is tested, committed, and pushed before the next phase starts.
    leases, reconciliation, confirmed result reuse, and current-policy checks.
 4. Task lifecycle and enforcement: implemented persisted acceptance/progress state,
    evidence completion policy, measured budgets, and bounded traced hooks.
-5. Skills, memory, and learning governance: pending.
+5. Skills, memory, and learning governance: implemented reviewed filesystem skills,
+   scope-bound access before ranking, revision history, promotion and rollback.
 6. Evaluation execution and compaction checks: pending.
 7. Cross-domain demonstrations: pending.
 
@@ -36,3 +37,11 @@ Each phase is tested, committed, and pushed before the next phase starts.
   CompletionPolicy. HookRunner exposes before-model/action/result/completion boundaries;
   AsyncActionRuntime wires action/result hooks and TaskLifecycle wires completion.
   Only observational after-result hooks may fail open. Callbacks must honor cancellation.
+- Install `[skills]` for YAML parsing. FilesystemSkillSource accepts a trusted
+  digest manifest and policy; discovery is lazy and resources need separate access.
+  It never executes scripts. Keep manifests outside agent-writable storage.
+- RevisionRepository binds trusted identity/scope and retains candidate/activation
+  history. ScopedMemoryStore ranks only authorized scoped items. ProcedurePromoter
+  requires validation evidence; rejected proposals never replace the active version.
+  Use separate namespaces for memory and procedures. The reference aggregate is
+  intended for small local stores, not large distributed corpora.

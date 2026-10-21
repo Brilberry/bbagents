@@ -30,6 +30,7 @@ langchain = ["langchain-core>=1.0,<2.0"]
 langgraph = ["langgraph>=1.0,<2.0"]
 langfuse = ["langfuse>=4.0"]
 langsmith = ["langsmith>=0.1.95"]
+skills = ["PyYAML>=6,<7"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
