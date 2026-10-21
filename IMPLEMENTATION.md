@@ -6,7 +6,8 @@ Each phase is tested, committed, and pushed before the next phase starts.
    replacement. FileStateStore remains a single-writer reference backend.
 2. Deadlines and retries: implemented cooperative async deadlines, allowlisted
    subprocess cancellation, typed failures and conservative retry policy.
-3. Recovery and idempotency: pending.
+3. Recovery and idempotency: implemented durable intent, action/state binding,
+   leases, reconciliation, confirmed result reuse, and current-policy checks.
 4. Task lifecycle and enforcement: pending.
 5. Skills, memory, and learning governance: pending.
 6. Evaluation execution and compaction checks: pending.
@@ -25,3 +26,7 @@ Each phase is tested, committed, and pushed before the next phase starts.
   synchronous ActionRuntime remains available and does not enforce deadlines.
 - `SafeRetryPolicy` retries confirmed transient failures only when `retry_safe`
   is explicitly set. An idempotency key alone does not prove a provider honors it.
+- `RecoverableActionRuntime` requires stable execution IDs and JSON-compatible
+  action metadata/results. Uncertain outcomes and expired leases require an
+  application reconciler. A NOT_EXECUTED answer must rule out a late side effect;
+  the journal cannot discover this on its own. It never promises exactly-once.

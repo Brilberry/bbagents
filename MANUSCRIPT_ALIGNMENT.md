@@ -31,6 +31,10 @@ by the book. The following gaps need explicit design before production use:
   reaps direct child processes. The legacy synchronous dispatcher does not enforce
   deadlines. External side effects and descendants require application controls;
   timeouts produce uncertain outcomes that must be reconciled before replay.
+- ExecutionJournal and RecoverableActionRuntime now persist intent and confirmed
+  results, bind action/state fingerprints, protect live claims, and recheck current
+  authorization. Reconciler implementations establish external status; an unknown
+  result blocks replay, and no exactly-once guarantee is inferred from a journal.
 - Hooks, durable cross-session task lifecycle, completion gates, and no-progress
   budgets are application/orchestrator responsibilities. No library hook engine
   currently provides deadline, failure, and trace semantics.
