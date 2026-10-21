@@ -12,5 +12,4 @@ pip install -e '.[dev]'
 pytest
 ```
 
-See [examples](examples/), the [guide](GUIDE.md), and the
-[manuscript alignment audit](MANUSCRIPT_ALIGNMENT.md).
+See [examples](examples/) and the [guide](GUIDE.md).
