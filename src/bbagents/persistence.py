@@ -5,6 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
+import tempfile
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -147,7 +150,7 @@ class FileStateStore(Generic[T]):
         if payload["key"] != key:
             raise ValueError("state file key does not match requested key")
         version = payload["version"]
-        if not isinstance(version, int) or version < 1:
+        if type(version) is not int or version < 1:
             raise ValueError("state file version must be a positive integer")
         saved_at = datetime.fromisoformat(payload["saved_at"])
         if saved_at.tzinfo is None:
@@ -179,12 +182,92 @@ class FileStateStore(Generic[T]):
 
     def _write(self, path: Path, payload: Mapping[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".tmp")
-        with temporary.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.replace(path)
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.stem}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
+
+class SQLiteStateStore(FileStateStore[T]):
+    """Transactional JSON checkpoints; version checks serialize competing writers.
+
+    Each operation uses a separate connection. Corrupt database/schema errors are
+    surfaced; tolerant reads are deliberately limited to the file reference store.
+    The inherited JSON codec is shared with FileStateStore.
+    """
+
+    def __init__(
+        self,
+        database: str | Path,
+        *,
+        encode: Callable[[T], Any] | None = None,
+        decode: Callable[[Any], T] | None = None,
+    ) -> None:
+        self.database = Path(database)
+        self.database.parent.mkdir(parents=True, exist_ok=True)
+        super().__init__(self.database.parent, encode=encode, decode=decode)
+        with closing(sqlite3.connect(self.database)) as db, db:
+            db.execute(
+                "CREATE TABLE IF NOT EXISTS checkpoints "
+                "(key TEXT PRIMARY KEY, payload TEXT NOT NULL)"
+            )
+
+    def load(self, key: str) -> StateSnapshot[T] | None:
+        with closing(sqlite3.connect(self.database)) as db:
+            row = db.execute(
+                "SELECT payload FROM checkpoints WHERE key = ?", (key,)
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else self._snapshot_from_payload(key, json.loads(row[0]))
+        )
+
+    def save(
+        self,
+        key: str,
+        value: T,
+        *,
+        expected_version: int | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> StateSnapshot[T]:
+        with closing(sqlite3.connect(self.database)) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT payload FROM checkpoints WHERE key = ?", (key,)
+            ).fetchone()
+            previous = (
+                self._snapshot_from_payload(key, json.loads(row[0])) if row else None
+            )
+            version = previous.version if previous else 0
+            if expected_version is not None and version != expected_version:
+                raise ConcurrentWriteError(
+                    f"State {key!r} is at version {version}, not {expected_version}"
+                )
+            snapshot = StateSnapshot(
+                key, value, version + 1, metadata=dict(metadata or {})
+            )
+            payload = json.dumps(self._payload_for(snapshot), allow_nan=False)
+            db.execute(
+                "INSERT INTO checkpoints VALUES (?, ?) ON CONFLICT(key) "
+                "DO UPDATE SET payload = excluded.payload",
+                (key, payload),
+            )
+        return snapshot
 
 
 def _identity(value: T) -> T:

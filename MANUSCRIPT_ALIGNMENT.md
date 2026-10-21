@@ -42,9 +42,9 @@ by the book. The following gaps need explicit design before production use:
   without demonstrated success in the empirical success rate.
 - Summary source records preserve attribution but do not prove summary fidelity or
   enforce trust. Memory access and provenance labels also require host policies.
-- The file-backed checkpoint store is a local reference backend, not a concurrent
-  transactional database. Atomic replacement alone does not make its version check
-  safe across competing writers.
+- SQLiteStateStore now supplies transactional version checks across competing
+  writers. FileStateStore uses unique temporary files and failure cleanup, but
+  remains a single-writer reference backend.
 
 These boundaries apply to both the release-manager and pandemic-response demos.
 The release demo still simulates publication and release-note generation; it does
