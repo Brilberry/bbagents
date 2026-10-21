@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bbagents"
+version = "0.1.0"
+description = "Provider-neutral building blocks for reliable AI agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "BrilBerry" }]
+keywords = ["agents", "ai", "planning", "tools", "memory"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/Brilberry/bbagents"
+Book = "https://press.brilberry.com"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10"]
+langchain = ["langchain-core>=1.0,<2.0"]
+langgraph = ["langgraph>=1.0,<2.0"]
+langfuse = ["langfuse>=4.0"]
+langsmith = ["langsmith>=0.1.95"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+bbagents = ["py.typed"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests", "demos"]
+pythonpath = ["src", "."]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
