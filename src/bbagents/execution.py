@@ -17,6 +17,7 @@ from .runtime import (
     FailureKind,
     _evaluate_policy,
 )
+from .hooks import HookBoundary, HookContext, HookRejected, HookRunner
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,10 +124,12 @@ class AsyncActionRuntime:
         *,
         policy: ActionPolicy | None = None,
         retry_policy: RetryPolicy | None = None,
+        hooks: HookRunner | None = None,
     ) -> None:
         self.adapter = adapter
         self.policy = policy or AllowAllPolicy()
         self.retry_policy = retry_policy or SafeRetryPolicy()
+        self.hooks = hooks or HookRunner()
 
     async def execute(self, action: Action) -> ActionResult:
         if not math.isfinite(action.timeout_seconds) or action.timeout_seconds <= 0:
@@ -146,16 +149,37 @@ class AsyncActionRuntime:
                     intervention_request_id=decision.intervention_request_id,
                 )
             attempt += 1
+            dispatched = False
             try:
                 async with asyncio.timeout(context.remaining_seconds):
                     context.check_deadline()
+                    await self.hooks.run(
+                        HookContext(HookBoundary.BEFORE_ACTION, {"action": action})
+                    )
+                    dispatched = True
                     output = await self.adapter.execute(action, context)
                     context.check_deadline()
+                    await self.hooks.run(
+                        HookContext(
+                            HookBoundary.AFTER_RESULT,
+                            {"action": action, "output": output},
+                        )
+                    )
                 return ActionResult(
                     ActionStatus.SUCCEEDED,
                     output,
                     attempts=attempt,
                     duration_seconds=time.monotonic() - started,
+                )
+            except HookRejected as exc:
+                result = ActionResult(
+                    ActionStatus.FAILED if dispatched else ActionStatus.DENIED,
+                    error=str(exc),
+                    attempts=attempt,
+                    failure_kind=FailureKind.UNKNOWN
+                    if dispatched
+                    else FailureKind.VALIDATION,
+                    outcome_unknown=dispatched,
                 )
             except TimeoutError as exc:
                 result = ActionResult(

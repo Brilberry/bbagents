@@ -35,9 +35,9 @@ by the book. The following gaps need explicit design before production use:
   results, bind action/state fingerprints, protect live claims, and recheck current
   authorization. Reconciler implementations establish external status; an unknown
   result blocks replay, and no exactly-once guarantee is inferred from a journal.
-- Hooks, durable cross-session task lifecycle, completion gates, and no-progress
-  budgets are application/orchestrator responsibilities. No library hook engine
-  currently provides deadline, failure, and trace semantics.
+- TaskLifecycle now persists task progress, acceptance evidence and measured budgets.
+  HookRunner provides bounded traced boundaries; application/orchestrator code owns
+  scheduling, budget measurement and recovery against the actual environment.
 - `SkillSource` is a contract, not an Agent Skills filesystem parser or permission
   engine. The host verifies scope, revision, owner, and provenance before loading.
 - Evaluation records and reports are implemented; dataset execution, environment

@@ -8,7 +8,8 @@ Each phase is tested, committed, and pushed before the next phase starts.
    subprocess cancellation, typed failures and conservative retry policy.
 3. Recovery and idempotency: implemented durable intent, action/state binding,
    leases, reconciliation, confirmed result reuse, and current-policy checks.
-4. Task lifecycle and enforcement: pending.
+4. Task lifecycle and enforcement: implemented persisted acceptance/progress state,
+   evidence completion policy, measured budgets, and bounded traced hooks.
 5. Skills, memory, and learning governance: pending.
 6. Evaluation execution and compaction checks: pending.
 7. Cross-domain demonstrations: pending.
@@ -30,3 +31,8 @@ Each phase is tested, committed, and pushed before the next phase starts.
   action metadata/results. Uncertain outcomes and expired leases require an
   application reconciler. A NOT_EXECUTED answer must rule out a late side effect;
   the journal cannot discover this on its own. It never promises exactly-once.
+- TaskLifecycle persists progress but does not schedule work. Hosts measure/report
+  time and spend and check budgets before dispatch. Domain completion rules implement
+  CompletionPolicy. HookRunner exposes before-model/action/result/completion boundaries;
+  AsyncActionRuntime wires action/result hooks and TaskLifecycle wires completion.
+  Only observational after-result hooks may fail open. Callbacks must honor cancellation.
