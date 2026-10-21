@@ -158,11 +158,14 @@ class RecoverableActionRuntime:
             expected_version=version,
         )
         result = await self.runtime.execute(action)
+        state = "uncertain" if result.outcome_unknown else "finished"
+        if result.status in {ActionStatus.PENDING_INTERVENTION, ActionStatus.DENIED}:
+            state = "uncertain"
         self.journal.save(
             ExecutionRecord(
                 execution_id,
                 fingerprint,
-                "uncertain" if result.outcome_unknown else "finished",
+                state,
                 0,
                 result,
             ),

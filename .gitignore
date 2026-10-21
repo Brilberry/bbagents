@@ -1,5 +1,6 @@
 __pycache__/
 .venv/
+.bbagents/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/

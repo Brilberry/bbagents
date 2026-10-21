@@ -1,0 +1,4 @@
+include GUIDE.md INVENTORY.md MANUSCRIPT_ALIGNMENT.md IMPLEMENTATION.md
+recursive-include examples *.py *.md
+recursive-include demos *.py *.md
+recursive-include tests *.py

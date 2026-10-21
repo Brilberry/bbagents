@@ -15,7 +15,9 @@ Each phase is tested, committed, and pushed before the next phase starts.
 6. Evaluation execution and compaction checks: implemented versioned datasets,
    isolated fixture lifecycle, configuration binding, calibration records, empirical
    variability, opt-in Wilson intervals and structured continuation probes.
-7. Cross-domain demonstrations: pending.
+7. Cross-domain demonstrations: implemented durable release and pandemic-response
+   fixtures using shared approval, execution journal and completion contracts.
+   Added optional Ollama decisions and offline transport tests.
 
 ## Migration notes
 
@@ -53,3 +55,7 @@ Each phase is tested, committed, and pushed before the next phase starts.
   unless independent Bernoulli trials are explicitly justified; repeated task runs
   are often correlated. CompactionGrader consumes observed continuation behavior,
   not the summary's claims about itself.
+- StateInterventionStore preserves approval lifecycle over StateStore; approved
+  requests can be revoked or expire after restart. Release publication remains a
+  simulated transactional index. `--model NAME` opts into an installed Ollama model;
+  no model download or real publication occurs implicitly.

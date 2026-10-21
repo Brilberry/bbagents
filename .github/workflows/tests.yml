@@ -1,0 +1,21 @@
+name: Tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e '.[dev,skills,langgraph,langchain,langsmith]'
+      - run: python -m pytest
+      - run: python -m ruff check src tests examples demos
+      - run: python -m mypy src
+      - run: python demos/pandemic_response.py
+      - run: python demos/autonomous_release_manager.py --approve --state-dir "$RUNNER_TEMP/release"

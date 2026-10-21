@@ -61,6 +61,12 @@ coverage and explicit production limitations.
 
 ## Deliberate omissions
 
+The seven production-contract phases now add `execution`, `recovery`, `hooks`,
+`lifecycle`, `revisions`, `governed_memory`, `promotion`, `experiments`, and
+`compaction`, plus filesystem-skill and local Ollama adapters. The implementation
+and migration details are in [IMPLEMENTATION.md](IMPLEMENTATION.md). These are
+portable adaptations, not new chapter-local snippets or a separate orchestrator.
+
 The following snippets are educational integration examples rather than portable
 library code: OpenAI/Anthropic/LangGraph calls, shell and repository mutation, browser
 and computer use, deployment commands, concrete vector databases, distributed

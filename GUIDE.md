@@ -193,6 +193,12 @@ interfaces. The library does not concatenate them. It makes these adaptations:
 
 ## Design constraints
 
+The [implementation notes](IMPLEMENTATION.md) describe production contracts and
+migration from the original synchronous reference runtimes. New modules cover
+transactional persistence, bounded execution, effect recovery, task lifecycle,
+governed memory/skills/procedure promotion, and isolated evaluation experiments.
+The root API stays small; import these features from their responsibility modules.
+
 - Standard library only at runtime.
 - Default-deny capability policy when safety controls are used.
 - Deterministic code owns loops, retries, policy checks, and state transitions.

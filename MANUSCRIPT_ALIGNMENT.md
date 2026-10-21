@@ -15,8 +15,8 @@ or production implementations of every sketch.
 | Chapter 6: heterogeneous specialization | `models` catalog/selector, role-scoped candidates, independent reviewer exclusion; application owns coordination. |
 | Chapter 7: explicit plans | `planning`: dependencies, cycle rejection, evidence, one-step executor; `reference` supplies the local synchronous runner. |
 | Chapter 8: harness composition and skills | Existing primitives compose into application harnesses. `skills` adds version, owner, scope, provenance, resource references, and discovery/loading contracts. No universal harness or second graph scheduler is added. |
-| Chapter 9: memory | `memory`, `provenance`, `persistence`: versioned records, retrieval, checkpoints, trust labels. Production scoping, access enforcement, audit history, consolidation, and rollback remain application responsibilities. |
-| Chapter 10: runtime learning | `learning`: injected generalization and validation, idempotent evidence assignment. Procedures carry version, owner, and scope. Promotion history, rollback, and evaluation-driven deployment are not implemented by the local runtime. |
+| Chapter 9: memory | `memory`, `governed_memory`, `revisions`, `provenance`, `persistence`: scoped access, versioned records, retrieval, checkpoints, history and rollback. Domain consolidation remains application-defined. |
+| Chapter 10: runtime learning | `learning` and `promotion`: generalization, validation, versioned promotion evidence, activation history and rollback. Applications supply evaluation and promotion authority. |
 | Chapter 11: organizations | `organization`, `safety`, `intervention`: typed roles, messages, governance and delegated approval; transport and scheduling remain adapters. |
 | Chapter 12: optimization | `models`, `optimization`, `context`: selection constraints, caching, context budget. Distributed scheduling and speculative execution remain outside the library. |
 | Chapter 13: safety | Capabilities, intervention fingerprints/expiry, provenance, trace redaction. Skills remain guidance and do not grant tool authority. Authentication, tenant isolation, OS restrictions, and configuration review must be supplied by the host. |
@@ -24,8 +24,8 @@ or production implementations of every sketch.
 
 ## Remaining implementation boundaries
 
-The library is a reference framework, not the complete production system described
-by the book. The following gaps need explicit design before production use:
+The seven implementation phases are complete; see [IMPLEMENTATION.md](IMPLEMENTATION.md).
+The following deployment responsibilities and reference-backend limitations remain:
 
 - AsyncActionRuntime enforces cooperative deadlines; SubprocessAdapter kills and
   reaps direct child processes. The legacy synchronous dispatcher does not enforce
@@ -54,6 +54,8 @@ by the book. The following gaps need explicit design before production use:
   writers. FileStateStore uses unique temporary files and failure cleanup, but
   remains a single-writer reference backend.
 
-These boundaries apply to both the release-manager and pandemic-response demos.
-The release demo still simulates publication and release-note generation; it does
-not demonstrate an actual LLM call or a live package-index release.
+These boundaries apply to both the release-manager and pandemic-response fixture.
+The release demo persists approvals/state and reconciles its simulated index.
+Release-note generation is deterministic by default; `--model` opts into an installed
+local Ollama model. The adapter is tested with an offline transport; a live model
+service and real package-index publication are not required or exercised by CI.

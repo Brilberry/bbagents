@@ -129,3 +129,25 @@ def test_skill_resource_loading_does_not_execute_scripts(tmp_path):
     assert source.read_resource("release", version="1", resource="check.py") == payload
     with pytest.raises(KeyError):
         source.read_resource("release", version="1", resource="../secret")
+
+
+def test_skill_resource_symlink_cannot_escape_reviewed_directory(tmp_path):
+    directory = tmp_path / "release"
+    directory.mkdir()
+    secret = tmp_path / "secret"
+    secret.write_bytes(b"not in skill")
+    (directory / "reference").symlink_to(secret)
+    descriptor = SkillDescriptor(
+        "release", "1", "owner", "a", "guide", Provenance.external("reviewed")
+    )
+    pin = PinnedSkill(
+        descriptor,
+        "release",
+        "unused",
+        {"reference": hashlib.sha256(secret.read_bytes()).hexdigest()},
+    )
+    source = FilesystemSkillSource(
+        tmp_path, (pin,), AccessContext("maintainer", "a"), Policy()
+    )
+    with pytest.raises(PermissionError, match="escapes"):
+        source.read_resource("release", version="1", resource="reference")

@@ -42,3 +42,37 @@ def test_failed_validation_blocks_release_without_requesting_approval() -> None:
     assert result.status == ActionStatus.DENIED
     assert manager.intervention_channel.requests == []
     assert manager.published_versions == []
+
+
+def test_release_restarts_with_approval_and_reuses_publication(tmp_path):
+    first = AutonomousReleaseManager(
+        check_runner=passing_check, state_directory=tmp_path
+    )
+    first.preflight()
+    request_id = first.publish().intervention_request_id
+    restarted = AutonomousReleaseManager(
+        check_runner=passing_check, state_directory=tmp_path
+    )
+    assert restarted.current().intervention_request_id == request_id
+    restarted.approve("release-approver")
+    assert restarted.publish().success
+    again = AutonomousReleaseManager(
+        check_runner=passing_check, state_directory=tmp_path
+    )
+    assert again.publish().success
+    assert again.published_versions == []
+    assert (
+        again.tasks.load(f"release:{again.current().version}")[0].status == "complete"
+    )
+
+
+def test_injected_model_drafts_notes_without_bypassing_approval():
+    class Model:
+        def decide(self, request):
+            return "Drafted by a model adapter."
+
+    manager = AutonomousReleaseManager(
+        check_runner=passing_check, decision_model=Model()
+    )
+    assert manager.preflight().release_notes == "Drafted by a model adapter."
+    assert manager.publish().status == ActionStatus.PENDING_INTERVENTION

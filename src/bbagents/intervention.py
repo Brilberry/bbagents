@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Mapping, Protocol
 from uuid import uuid4
 
-from .persistence import ConcurrentWriteError
-from .provenance import Provenance
+from .persistence import ConcurrentWriteError, StateStore
+from .provenance import Provenance, TrustLevel
 from .runtime import Action, AuthorizationDecision
 
 
@@ -117,9 +117,8 @@ class Delegation:
 
     def is_active(self, at: datetime | None = None) -> bool:
         current = at or datetime.now(UTC)
-        return (
-            self.revoked_at is None
-            and (self.expires_at is None or self.expires_at > current)
+        return self.revoked_at is None and (
+            self.expires_at is None or self.expires_at > current
         )
 
 
@@ -181,11 +180,10 @@ class InMemoryInterventionStore:
         self._records: dict[str, InterventionRecord] = {}
 
     def create(self, request: InterventionRequest) -> InterventionRecord:
-        if request.id in self._records:
+        if self.get(request.id) is not None:
             raise ValueError(f"Intervention request already exists: {request.id}")
         record = InterventionRecord(request)
-        self._records[request.id] = record
-        return record
+        return self._persist(record, expected_version=0)
 
     def get(self, request_id: str) -> InterventionRecord | None:
         return self._records.get(request_id)
@@ -206,26 +204,24 @@ class InMemoryInterventionStore:
         status = _status_for(record.request, response)
         return self._replace(record, status=status, response=response)
 
-    def revoke(
-        self, request_id: str, *, expected_version: int
-    ) -> InterventionRecord:
+    def revoke(self, request_id: str, *, expected_version: int) -> InterventionRecord:
         return self._replace(
-            self._require_pending(request_id, expected_version),
+            self._require_pending(request_id, expected_version, allow_approved=True),
             status=InterventionStatus.REVOKED,
         )
 
-    def expire(
-        self, request_id: str, *, expected_version: int
-    ) -> InterventionRecord:
-        record = self._require_pending(request_id, expected_version)
+    def expire(self, request_id: str, *, expected_version: int) -> InterventionRecord:
+        record = self._require_pending(
+            request_id, expected_version, allow_approved=True
+        )
         if not record.request.is_expired():
             raise ValueError("intervention request has not expired")
         return self._replace(record, status=InterventionStatus.EXPIRED)
 
     def _require_pending(
-        self, request_id: str, expected_version: int
+        self, request_id: str, expected_version: int, *, allow_approved: bool = False
     ) -> InterventionRecord:
-        record = self._records.get(request_id)
+        record = self.get(request_id)
         if record is None:
             raise KeyError(f"Unknown intervention request: {request_id}")
         if record.version != expected_version:
@@ -233,7 +229,10 @@ class InMemoryInterventionStore:
                 f"Intervention {request_id!r} is at version {record.version}, "
                 f"not {expected_version}"
             )
-        if record.status != InterventionStatus.PENDING:
+        allowed = {InterventionStatus.PENDING}
+        if allow_approved:
+            allowed.add(InterventionStatus.APPROVED)
+        if record.status not in allowed:
             raise ValueError(f"Intervention request is already {record.status.value}")
         return record
 
@@ -250,8 +249,65 @@ class InMemoryInterventionStore:
             response,
             version=record.version + 1,
         )
-        self._records[record.request.id] = updated
-        return updated
+        return self._persist(updated, expected_version=record.version)
+
+    def _persist(
+        self, record: InterventionRecord, *, expected_version: int
+    ) -> InterventionRecord:
+        current = self.get(record.request.id)
+        if (current.version if current else 0) != expected_version:
+            raise ConcurrentWriteError("Intervention version changed")
+        self._records[record.request.id] = record
+        return record
+
+
+class StateInterventionStore(InMemoryInterventionStore):
+    """Durable intervention lifecycle over a transactional StateStore."""
+
+    def __init__(self, store: StateStore[dict[str, Any]]) -> None:
+        self.store = store
+
+    def get(self, request_id: str) -> InterventionRecord | None:
+        snapshot = self.store.load(request_id)
+        if snapshot is None:
+            return None
+        data = dict(snapshot.value)
+        request = dict(data["request"])
+        request["kind"] = InterventionKind(request["kind"])
+        request["created_at"] = datetime.fromisoformat(request["created_at"])
+        if request["expires_at"] is not None:
+            request["expires_at"] = datetime.fromisoformat(request["expires_at"])
+        provenance = dict(request["provenance"])
+        provenance["trust"] = TrustLevel(provenance["trust"])
+        provenance["received_at"] = datetime.fromisoformat(provenance["received_at"])
+        request["provenance"] = Provenance(**provenance)
+        response = data["response"]
+        if response is not None:
+            response = dict(response)
+            response["actor_kind"] = ActorKind(response["actor_kind"])
+            response["decision"] = InterventionDecision(response["decision"])
+            response["created_at"] = datetime.fromisoformat(response["created_at"])
+            response = InterventionResponse(**response)
+        return InterventionRecord(
+            InterventionRequest(**request),
+            InterventionStatus(data["status"]),
+            response,
+            snapshot.version,
+            datetime.fromisoformat(data["updated_at"]),
+        )
+
+    def _persist(
+        self, record: InterventionRecord, *, expected_version: int
+    ) -> InterventionRecord:
+        payload = json.loads(json.dumps(asdict(record), default=_encode_datetime))
+        self.store.save(record.request.id, payload, expected_version=expected_version)
+        return record
+
+
+def _encode_datetime(value: Any) -> str:
+    if not isinstance(value, datetime):
+        raise TypeError("Intervention data must contain JSON values or datetimes")
+    return value.isoformat()
 
 
 class InMemoryInterventionChannel:
@@ -264,9 +320,7 @@ class InMemoryInterventionChannel:
     def deliver(self, request: InterventionRequest) -> None:
         self.requests.append(request)
 
-    def submit_response(
-        self, request_id: str, response: InterventionResponse
-    ) -> None:
+    def submit_response(self, request_id: str, response: InterventionResponse) -> None:
         if not any(request.id == request_id for request in self.requests):
             raise KeyError(f"Unknown intervention request: {request_id}")
         self.responses[request_id] = response
@@ -384,7 +438,10 @@ class ActionInterventionService:
         record = self.store.get(request_id)
         if record is None:
             raise KeyError(f"Unknown intervention request: {request_id}")
-        if record.status == InterventionStatus.PENDING and record.request.is_expired():
+        if (
+            record.status in {InterventionStatus.PENDING, InterventionStatus.APPROVED}
+            and record.request.is_expired()
+        ):
             return self.store.expire(request_id, expected_version=record.version)
         return record
 

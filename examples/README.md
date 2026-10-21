@@ -1,5 +1,22 @@
 # Examples
 
+## Production contracts
+
+All of these examples run offline by default:
+
+- `durable_checkpoints.py`: reopen SQLite state and reject a stale writer.
+- `bounded_execution.py`: cancel cooperative work and report an uncertain outcome.
+- `recovering_effects.py`: reconcile a completed effect without repeating it.
+- `task_completion.py`: persist acceptance evidence and enforce completion.
+- `governed_memory.py`: scope isolation, revision history, and rollback.
+- `isolated_evaluation.py`: fresh environments for repeated dataset trials.
+- `local_model.py`: model adapter and token usage via a fixture; pass `--model NAME`
+  to call an installed Ollama model using its [chat API](https://docs.ollama.com/api/chat).
+
+The release and pandemic integration fixtures are documented in [demos](../demos/).
+The test suite executes every offline example. Hosted tracing exporters are tested
+with fake clients rather than uploading traces during tests.
+
 ## LangGraph integration
 
 `langgraph_integration.py` demonstrates the inverse of the LangChain example's
