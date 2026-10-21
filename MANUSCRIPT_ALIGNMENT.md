@@ -41,10 +41,11 @@ by the book. The following gaps need explicit design before production use:
 - FilesystemSkillSource parses reviewed SKILL.md files with optional PyYAML, verifies
   scope, digest and path containment, and authorizes resources separately. Hosts
   supply trusted manifests and identity; scripts remain subject to execution policy.
-- Evaluation records and reports are implemented; dataset execution, environment
-  reset, held-out case selection, judge calibration, and statistical confidence
-  estimation remain application responsibilities. Unknown grades count as trials
-  without demonstrated success in the empirical success rate.
+- Dataset trials now have isolated fixture lifecycle, held-out selection, configuration
+  checks, calibration reports and empirical variability. Wilson intervals require
+  an explicit independence assumption. Hosts still implement environment isolation
+  and supply representative datasets, human labels and domain graders. Unknown
+  grades count as trials without demonstrated success in the empirical rate.
 - ScopedMemoryStore and RevisionRepository enforce host-defined access before
   ranking and retain revision/activation history. ProcedurePromoter records validation
   and rollback. Provenance labels still require trustworthy host assignment;

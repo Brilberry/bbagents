@@ -12,7 +12,9 @@ Each phase is tested, committed, and pushed before the next phase starts.
    evidence completion policy, measured budgets, and bounded traced hooks.
 5. Skills, memory, and learning governance: implemented reviewed filesystem skills,
    scope-bound access before ranking, revision history, promotion and rollback.
-6. Evaluation execution and compaction checks: pending.
+6. Evaluation execution and compaction checks: implemented versioned datasets,
+   isolated fixture lifecycle, configuration binding, calibration records, empirical
+   variability, opt-in Wilson intervals and structured continuation probes.
 7. Cross-domain demonstrations: pending.
 
 ## Migration notes
@@ -45,3 +47,9 @@ Each phase is tested, committed, and pushed before the next phase starts.
   requires validation evidence; rejected proposals never replace the active version.
   Use separate namespaces for memory and procedures. The reference aggregate is
   intended for small local stores, not large distributed corpora.
+- run_dataset requires a fresh context-managed environment per trial; hosts provide
+  actual isolation/reset. Runner identity/configuration mismatches fail loudly after
+  cleanup. Held-out cases are excluded by default. success_interval returns nothing
+  unless independent Bernoulli trials are explicitly justified; repeated task runs
+  are often correlated. CompactionGrader consumes observed continuation behavior,
+  not the summary's claims about itself.
