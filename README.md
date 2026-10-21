@@ -14,76 +14,109 @@ pytest
 
 ## Example
 
-Inspect a repository before recommending an OAuth migration. This uses sample
-repository data and a local Ollama model; replace the tool with your repository
-reader. Run Ollama with an installed model and set `OLLAMA_MODEL` to its name.
+An agent proposes a release. Your application must obtain human approval, survive
+restarts, and avoid blindly repeating publication. This runnable example uses a
+local file as a simulated package index; it never publishes to PyPI.
+
+Run it once to create the approval request, then again to approve or defer.
+Subsequent runs reuse the recorded result. No model or credentials are required:
+the proposed action is fixed here to focus on execution safeguards.
 
 ```python
-import os
+import asyncio
+from dataclasses import replace
+from pathlib import Path
 
-from bbagents import (
-    AgentState, DecisionRequest, DecisionRuntime, FunctionTool,
-    Observation, Plan, PlanStep, ToolCall, ToolRegistry,
+from bbagents import Action, ActionResult, ActionStatus
+from bbagents.execution import AsyncActionRuntime, AsyncFunctionAdapter
+from bbagents.intervention import (
+    ActionInterventionPolicy, ActionInterventionService, ActorKind,
+    HumanOrDelegatedAuthority, InterventionDecision, InterventionResponse,
+    InterventionStatus, StateInterventionStore,
 )
-from bbagents.context import Context
-from bbagents.integrations.ollama import OllamaDecisionModel
-from bbagents.observability import InMemoryTrace
-from bbagents.reference import PlanningAgent
+from bbagents.persistence import SQLiteStateStore
+from bbagents.recovery import (
+    ExecutionJournal, RecoverableActionRuntime, Reconciliation, ReconciliationStatus,
+)
 
-repository = {
-    "authentication": "AuthMiddleware validates signed sessions.",
-    "sessions": "SessionStore owns creation, rotation, expiry, and revocation.",
-}
+directory = Path(".release-example")
+directory.mkdir(exist_ok=True)
+store = SQLiteStateStore(directory / "state.db")
+approvals = ActionInterventionService(
+    StateInterventionStore(store), HumanOrDelegatedAuthority(),
+)
+artifact = directory / "bbagents-0.1.0.published"
+receipt = "bbagents 0.1.0 published to the simulated index"
 
 
-def inspect_component(component: str) -> Observation:
-    return Observation(
-        source="repository.inspect",
-        content=repository[component],
-        metadata={"component": component},
+async def publish(action, context):
+    # Exclusive creation makes this simulated publication immutable.
+    with artifact.open("x") as file:
+        file.write(receipt)
+    return receipt
+
+
+class PackageIndexLookup:
+    async def reconcile(self, action, record):
+        if artifact.exists() and artifact.read_text() == receipt:
+            return Reconciliation(
+                ReconciliationStatus.COMPLETED,
+                ActionResult(ActionStatus.SUCCEEDED, receipt),
+            )
+        # Absence alone does not prove a previous attempt cannot still finish.
+        return Reconciliation(ReconciliationStatus.UNKNOWN)
+
+
+async def main():
+    action = Action(
+        "publish", {"package": "bbagents", "version": "0.1.0"},
+        expected_effect="Publish bbagents 0.1.0 to the simulated index",
+        requires_confirmation=True, idempotency_key="bbagents-0.1.0",
+        metadata={"resource": "simulated-index"},
     )
+    saved = store.load("release-approval")
+    if saved is None:
+        request = approvals.request(action)
+        store.save("release-approval", {"id": request.id}, expected_version=0)
+        print("Awaiting human approval. Run again to review.")
+        return
+
+    record = approvals.get(saved.value["id"])
+    if record.status == InterventionStatus.PENDING:
+        if input(f"{record.request.summary}? [yes/no] ").strip().lower() != "yes":
+            print("Not approved; nothing published.")
+            return
+        # This CLI trusts its local operator, not model-supplied identity claims.
+        approvals.respond(record.request.id, InterventionResponse(
+            "local-operator", ActorKind.HUMAN, InterventionDecision.APPROVE,
+            record.version,
+        ))
+
+    runtime = RecoverableActionRuntime(
+        AsyncActionRuntime(
+            AsyncFunctionAdapter({"publish": publish}),
+            policy=ActionInterventionPolicy(approvals),
+        ),
+        ExecutionJournal(store), PackageIndexLookup(),
+    )
+    result = await runtime.execute(
+        replace(action, intervention_id=record.request.id),
+        execution_id="publish-bbagents-0.1.0",
+    )
+    print(f"Release result: {result.output if result.success else result.error}")
 
 
-tools = ToolRegistry([
-    FunctionTool("inspect", "Inspect a repository component", inspect_component),
-])
-goal = "Inspect authentication before recommending an OAuth migration"
-state = AgentState(goal, Plan(goal, [
-    PlanStep("authentication", "Inspect authentication"),
-    PlanStep("sessions", "Inspect session ownership", depends_on=["authentication"]),
-]))
-trace = InMemoryTrace()
-
-
-def select_calls(state: AgentState, step: PlanStep) -> list[ToolCall]:
-    return [ToolCall("inspect", {"component": step.id})]
-
-
-# Deterministic inspection first; the model receives the collected evidence.
-PlanningAgent(tools, select_calls, trace=trace).run(state)
-assert state.completed
-
-decision = DecisionRuntime(
-    OllamaDecisionModel(os.environ["OLLAMA_MODEL"]),
-    trace=trace,
-).decide(
-    DecisionRequest(
-        task="Recommend where to integrate OAuth without duplicating session logic.",
-        system="Use only the supplied evidence. Flag anything needing inspection.",
-        context=Context("\n".join(item.content for item in state.observations), ()),
-        schema=str,
-        validate=lambda text: bool(text.strip()),
-    ),
-    retries=1,
-)
-
-print(decision.value)
-print(f"Model: {decision.model_id}; usage: {decision.usage}")
-print(f"Completed steps: {len(state.plan.steps)}; trace events: {len(trace.events)}")
+asyncio.run(main())
 ```
 
-The reference runner is for small, local workflows. Use LangGraph for durable
-orchestration; the same contracts can run inside graph nodes.
+Approval and execution state survive process restarts. Confirmed results are reused;
+uncertain outcomes require application-owned reconciliation, not automatic replay.
+This is not an exactly-once guarantee. A hosted application must authenticate
+approvers and implement its actual package-index adapter.
+
+The [release-manager demo](demos/autonomous_release_manager.py) adds repository
+checks, completion gates and optional local-model release notes. For orchestration,
+use these contracts inside LangGraph nodes, including its interrupt/resume flow.
 
 ## Features
 

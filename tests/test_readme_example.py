@@ -1,46 +1,72 @@
-"""Keep the public README example executable without a running model server."""
+"""Exercise the README workflow across real process restarts, without network I/O."""
 
+import os
 from pathlib import Path
+import subprocess
+import sys
 
-from bbagents.integrations import ollama
+from bbagents.persistence import SQLiteStateStore
+from bbagents.recovery import ExecutionJournal, ExecutionRecord
 
 
-def test_readme_example(monkeypatch, capsys):
-    requests = []
-
-    def fixture_transport(url, payload, timeout):
-        requests.append(payload)
-        return {
-            "model": "readme-fixture",
-            "message": {
-                "content": "Extend AuthMiddleware and preserve SessionStore ownership.",
-            },
-            "done": True,
-            "prompt_eval_count": 20,
-            "eval_count": 8,
-        }
-
-    real_model = ollama.OllamaDecisionModel
-    monkeypatch.setattr(
-        ollama,
-        "OllamaDecisionModel",
-        lambda model: real_model(model, transport=fixture_transport),
-    )
-    monkeypatch.setenv("OLLAMA_MODEL", "readme-fixture")
-    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+def run_readme(directory, answer=""):
+    root = Path(__file__).resolve().parents[1]
+    readme = (root / "README.md").read_text()
     code = readme.split("```python\n", 1)[1].split("```", 1)[0]
-    namespace = {}
-    exec(compile(code, "README.md", "exec"), namespace)
+    env = {**os.environ, "PYTHONPATH": str(root / "src")}
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=directory, env=env,
+        input=answer, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
 
-    state = namespace["state"]
-    assert state.completed
-    assert [item.metadata["component"] for item in state.observations] == [
-        "authentication", "sessions",
-    ]
-    assert len(requests) == 1
-    prompt = requests[0]["messages"][1]["content"]
-    assert "AuthMiddleware validates signed sessions." in prompt
-    assert "SessionStore owns creation" in prompt
-    assert namespace["decision"].usage.total_tokens == 28
-    assert namespace["trace"].events
-    assert "Completed steps: 2; trace events:" in capsys.readouterr().out
+
+def approve_release(directory):
+    assert "Awaiting human approval" in run_readme(directory)
+    assert "simulated index" in run_readme(directory, "yes\n")
+
+
+def test_readme_pauses_defers_approves_and_reuses_result(tmp_path):
+    artifact = tmp_path / ".release-example/bbagents-0.1.0.published"
+    assert "Awaiting human approval" in run_readme(tmp_path)
+    assert not artifact.exists()
+    assert "Not approved; nothing published" in run_readme(tmp_path, "no\n")
+    assert not artifact.exists()
+    assert "simulated index" in run_readme(tmp_path, "yes\n")
+    before = artifact.stat()
+    assert "simulated index" in run_readme(tmp_path)
+    after = artifact.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+
+
+def mark_uncertain(directory):
+    journal = ExecutionJournal(
+        SQLiteStateStore(directory / ".release-example/state.db")
+    )
+    record, version = journal.load("publish-bbagents-0.1.0")
+    journal.save(
+        ExecutionRecord(record.id, record.fingerprint, "uncertain", 0),
+        expected_version=version,
+    )
+    return journal
+
+
+def test_readme_reconciles_publication_without_repeating_it(tmp_path):
+    approve_release(tmp_path)
+    journal = mark_uncertain(tmp_path)
+    artifact = tmp_path / ".release-example/bbagents-0.1.0.published"
+    before = artifact.stat().st_mtime_ns
+    assert "simulated index" in run_readme(tmp_path)
+    assert artifact.stat().st_mtime_ns == before
+    record, _ = journal.load("publish-bbagents-0.1.0")
+    assert record.state == "finished"
+
+
+def test_readme_does_not_replay_an_unknown_outcome(tmp_path):
+    approve_release(tmp_path)
+    mark_uncertain(tmp_path)
+    artifact = tmp_path / ".release-example/bbagents-0.1.0.published"
+    artifact.unlink()
+    assert "External outcome remains unknown" in run_readme(tmp_path)
+    assert not artifact.exists()
