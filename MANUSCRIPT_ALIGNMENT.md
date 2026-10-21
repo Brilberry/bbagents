@@ -27,10 +27,10 @@ or production implementations of every sketch.
 The library is a reference framework, not the complete production system described
 by the book. The following gaps need explicit design before production use:
 
-- `Action.timeout_seconds` is descriptive; the synchronous handler dispatcher does
-  not enforce deadlines or cancel work. Retrying a handler does not establish
-  idempotency or exactly-once effects. Execution adapters must implement those
-  guarantees and reconcile external state after recovery.
+- AsyncActionRuntime enforces cooperative deadlines; SubprocessAdapter kills and
+  reaps direct child processes. The legacy synchronous dispatcher does not enforce
+  deadlines. External side effects and descendants require application controls;
+  timeouts produce uncertain outcomes that must be reconciled before replay.
 - Hooks, durable cross-session task lifecycle, completion gates, and no-progress
   budgets are application/orchestrator responsibilities. No library hook engine
   currently provides deadline, failure, and trace semantics.

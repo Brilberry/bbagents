@@ -17,6 +17,8 @@ class Action:
     intervention_id: str | None = None
     timeout_seconds: float = 30.0
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    idempotency_key: str | None = None
+    retry_safe: bool = False
 
 
 class ActionStatus(str, Enum):
@@ -24,6 +26,17 @@ class ActionStatus(str, Enum):
     DENIED = "denied"
     PENDING_INTERVENTION = "pending_intervention"
     FAILED = "failed"
+    TIMED_OUT = "timed_out"
+    CANCELLED = "cancelled"
+
+
+class FailureKind(str, Enum):
+    VALIDATION = "validation"
+    TRANSIENT = "transient"
+    PERMANENT = "permanent"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +53,8 @@ class ActionResult:
     attempts: int = 1
     duration_seconds: float = 0.0
     intervention_request_id: str | None = None
+    failure_kind: FailureKind | None = None
+    outcome_unknown: bool = False
 
     @property
     def success(self) -> bool:
