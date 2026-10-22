@@ -3,7 +3,12 @@
 Python building blocks for agent systems: tools, planning, model selection, memory,
 human approval, tracing, and evaluation. Works with LangGraph or your own runtime.
 
-Companion code for *Agent Engineering*. [Buy the book](https://press.brilberry.com).
+Companion code for *Agentic AI: Architecture, Theory, and Practice*.
+[Buy the book](https://press.brilberry.com).
+
+<a href="https://press.brilberry.com">
+  <img src="assets/book-cover.png" alt="Agentic AI: Architecture, Theory, and Practice by Marco Dinacci" width="240" height="360">
+</a>
 
 Requires Python 3.11+.
 
