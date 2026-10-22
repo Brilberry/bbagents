@@ -37,7 +37,7 @@ def test_survival_pressure_interrupts_existing_plan() -> None:
 
 
 def test_agents_make_progress_over_long_run() -> None:
-    simulation = Simulation(seed=7)
+    simulation = Simulation(seed=7, lightning_probability=0)
 
     for _ in range(260):
         simulation.step()

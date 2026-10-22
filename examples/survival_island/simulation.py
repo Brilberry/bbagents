@@ -361,9 +361,17 @@ class Simulation:
         self.trace.record("sleep.checkpoint", {"agent": agent.id, "key": key,
                                                "version": saved.version, "status": status})
 
+    def sleep_site_available(self, agent: Survivor, position: Position) -> bool:
+        if self.world.tile(position).shelter_owner is None:
+            return True
+        return not any(other.id != agent.id and other.alive and other.sleep_remaining
+                       and other.position == position for other in self.agents)
+
     def sleep(self, agent: Survivor) -> Observation:
         if agent.sleep_remaining or self.visible_predators(agent) or agent.hunger >= 80 or agent.thirst >= 80:
             raise ValueError("sleep requires being awake, safe, fed, and hydrated")
+        if not self.sleep_site_available(agent, agent.position):
+            raise ValueError("shelter already has a sleeping survivor")
         agent.sleep_remaining = 12
         agent.sleep_elapsed = 0
         agent.resume_pending = False
@@ -387,6 +395,7 @@ class Simulation:
             return
         sheltered = self.world.tile(agent.position).shelter_owner is not None
         agent.energy = min(100, agent.energy + (5 if sheltered else 2.5))
+        agent.health = min(100, agent.health + (2 if sheltered else 1))
         agent.sleep_remaining -= 1
         agent.sleep_elapsed += 1
         agent.last_action = f"sleeping ({agent.sleep_remaining} ticks left)"
@@ -394,7 +403,8 @@ class Simulation:
             self._wake(agent, "finished", interrupted=False)
         else:
             self._save_sleep_checkpoint(agent, "sleeping")
-            self.trace.record("sleep.progress", {"agent": agent.id, "remaining": agent.sleep_remaining})
+            self.trace.record("sleep.progress", {"agent": agent.id, "remaining": agent.sleep_remaining,
+                                                "health": agent.health, "energy": agent.energy})
 
     def _wake(self, agent: Survivor, reason: str, *, interrupted: bool) -> None:
         agent.sleep_remaining = 0
@@ -656,10 +666,12 @@ class Simulation:
                                                "sheltered": sheltered, "recovery": recovery})
 
     def _apply_needs(self, agent: Survivor) -> None:
+        agent.sheltered = self.world.tile(agent.position).shelter_owner is not None
+        if agent.sleep_remaining:
+            return  # Sleep freezes needs and fatigue; predator/lightning damage still applies.
         agent.hunger = min(100.0, agent.hunger + 0.55)
         agent.thirst = min(100.0, agent.thirst + 0.8)
         agent.energy = max(0.0, agent.energy - (0.4 if self.is_night else 0.2))
-        agent.sheltered = self.world.tile(agent.position).shelter_owner is not None
         damage = 0.0
         causes = []
         if agent.hunger >= 90:
@@ -713,7 +725,8 @@ class Simulation:
         tile = self.world.tile(agent.position)
         calls = [ToolCall("observe_surroundings")]
         threats = self.visible_predators(agent)
-        if not threats and not agent.sleep_remaining and agent.hunger < 80 and agent.thirst < 80:
+        if (not threats and not agent.sleep_remaining and agent.hunger < 80 and agent.thirst < 80
+                and self.sleep_site_available(agent, agent.position)):
             calls.append(ToolCall("sleep"))
         if threats and agent.energy >= 3:
             calls.append(ToolCall("flee"))
@@ -1017,13 +1030,21 @@ class SurvivalPolicy:
                       for result in agent.memory.retrieve("sleep", limit=8)
                       if result.record.metadata.get("reason", "").startswith("predator")}
             site = self._nearest_known(agent, lambda pos:
-                self.sim.world.tile(pos).shelter_owner is not None and pos not in unsafe)
+                self.sim.world.tile(pos).shelter_owner is not None and pos not in unsafe
+                and self.sim.sleep_site_available(agent, pos))
             if site is None or site == agent.position:
                 return ToolCall("observe_surroundings"), True
             return ToolCall("move", {"direction": self._direction_toward(agent.position, site)}), False
         if sid == "wait-night":
             return ToolCall("observe_surroundings"), self.sim.is_night
         if sid == "sleep":
+            if not self.sim.sleep_site_available(agent, agent.position):
+                # Another survivor may have taken the shelter while we waited for night.
+                for direction, (dx, dy) in self.sim.DIRECTIONS.items():
+                    position = (agent.position[0] + dx, agent.position[1] + dy)
+                    if self.sim.world.passable(position) and self.sim.sleep_site_available(agent, position):
+                        return ToolCall("move", {"direction": direction}), False
+                return ToolCall("observe_surroundings"), False
             return ToolCall("sleep"), False
         if sid.startswith("locate-"):
             target = sid.removeprefix("locate-")

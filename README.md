@@ -186,8 +186,12 @@ flowchart LR
 ```
 
 The `sleep()` tool starts the activity once. The simulation advances it each tick
-without selecting more actions, restoring 2.5 energy outdoors or 5 in shelter
-before passive fatigue. Predators or hunger/thirst reaching 80 wake the agent
+without selecting more actions, restoring **2.5 energy and 1 HP outdoors**, or
+**5 energy and 2 HP in shelter**, per tick (capped at 100). Hunger and thirst
+freeze while asleep, and passive fatigue/need damage pauses. Only **one survivor
+can sleep per shelter**; night preparation avoids occupied shelters, and capacity
+is released on waking or death. Multiple survivors may sleep outdoors.
+Predators or externally changed hunger/thirst reaching 80 wake the agent
 early; a predator attack also interrupts sleep immediately. Sleeping survivors
 show a **z** on the map and a countdown in the sidebar.
 

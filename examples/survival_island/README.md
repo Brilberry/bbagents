@@ -109,8 +109,11 @@ A yellow bolt marks the latest strike. Set `lightning_probability=0` to disable 
 At dusk (tick 44 of each 80-tick cycle), survivors pause their current plan,
 eat/drink as needed, choose a known safe shelter if possible, and wait for night.
 `sleep()` begins a 12-tick activity. Sleeping stops normal action selection;
-the map shows a z and the sidebar shows remaining ticks. Recovery is 2.5 energy
-outdoors or 5 in shelter per tick, less passive fatigue. Visible predators,
+the map shows a z and the sidebar shows remaining ticks. Each tick restores
+2.5 energy and 1 HP outdoors, or 5 energy and 2 HP in shelter, capped at 100.
+Hunger, thirst, passive fatigue, and need damage pause while asleep. A shelter
+accommodates only one sleeper; preparation avoids occupied shelters and waking
+or death releases capacity. Outdoor sleeping has no occupancy limit. Visible predators,
 attacks, or hunger/thirst reaching 80 interrupt sleep. Defense and urgent needs
 take priority; the saved plan resumes when safe.
 
