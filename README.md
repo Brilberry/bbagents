@@ -171,6 +171,51 @@ task cancellation. Checkpoints and memories are in memory for this run; this
 example does not yet restore a saved island after restarting the process. Model
 plans remain advisory; the checkpoint preserves the executable rule-policy plan.
 
+### Traces and survivor postmortems
+
+Close the window, press **Escape**, or interrupt with Ctrl+C to finish a run and
+save its reports. Reports are also saved when a survivor dies; press **R** to save
+an intermediate snapshot. The terminal prints the path to `index.md`, which links
+to each survivor's history. By default, every run gets a unique directory under
+`survival-runs/` (ignored by Git).
+
+```sh
+python -m examples.survival_island.app --model qwen3.5:4b \
+  --report-dir survival-runs/my-experiment
+```
+
+Each directory contains:
+
+- `index.md`: all survivors, their status, death tick, and recorded final cause.
+- `agent-N.md`: that survivor's final needs and events from the last 200 ticks
+  before death (or before the save for living survivors).
+- `agent-N.jsonl`: the survivor's full event history, including received messages.
+- `trace.jsonl`: the full run's framework trace, with simulation ticks, timestamps,
+  and run/span correlation IDs.
+- `agent-N.summary.md`: an optional model postmortem for a deceased survivor.
+
+The trace includes per-tick health, hunger, thirst, energy, inventory, location,
+sleep, visible threats, plans, tool calls and results, model failures, communications,
+damage, and deaths. Tool calls identify rule decisions, model decisions, and
+waiting for inference. A fatal predator attack is recorded separately from
+starvation, dehydration, or exhaustion damage, making the final cause inspectable.
+
+With `--model`, a death automatically queues a background analysis using the same
+Ollama model. It receives that survivor's events from the final 200 simulation ticks,
+ending at the death tick, even if the game continues afterward. `ContextBuilder`
+limits the input to 60,000 characters, prioritizing damage and death evidence;
+the report states how many items were omitted if the window exceeds this budget.
+`DecisionRuntime` validates the summary and requires evidence ticks to exist in
+the supplied context. The explanation distinguishes the recorded cause, likely
+contributors, and uncertainties; it is an interpretation, not proof of causation.
+
+Raw reports are saved before model analysis. The window stays responsive while
+summaries run. On exit the terminal may remain busy finishing queued analyses;
+each request has a 90-second timeout and one retry. Model errors produce an error
+report without discarding the raw history. Use `--no-postmortem` to keep model
+gameplay enabled but save only the event reports. Without `--model`, event reports
+are still generated and no summaries are requested.
+
 ### Run locally
 
 From a checkout of this repository, using Python 3.11 or newer:

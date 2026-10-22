@@ -111,3 +111,21 @@ preparation avoids shelters associated with predator interruptions. Those memori
 also enter model context. Lifecycle trace events cover suspension, start, progress,
 interruption/completion, and resumption. The application owns tick scheduling;
 this is not framework async task cancellation or restart recovery of the world.
+
+### Survivor histories and death summaries
+
+Press R to save a snapshot; closing the window, Escape, or Ctrl+C saves the final
+reports. Deaths also trigger a save. The terminal prints the `index.md` path under
+a unique `survival-runs/` directory. Use `--report-dir PATH` for an explicit location.
+The index links to each survivor's Markdown report and full JSONL history;
+`trace.jsonl` preserves the complete run with ticks and framework correlation IDs.
+Reports show per-tick needs, inventory, location, actions, plans, threats, messages,
+damage, death tick, and recorded cause. No model is needed for raw reports.
+
+With `--model`, deceased survivors also get `agent-N.summary.md`: a background
+analysis of their final 200 ticks. `ContextBuilder` bounds the model input to
+60,000 characters and reports omissions; `DecisionRuntime` validates the result
+and its evidence ticks. Summaries separate the recorded cause from possible
+contributors and uncertainty. Failed analysis leaves an error report and preserves
+the raw logs. Exit waits for queued summaries (90-second timeout, one retry per
+request). Use `--no-postmortem` to disable this additional inference.

@@ -213,6 +213,7 @@ class ModelPolicy(SurvivalPolicy):
                                                           "goal": value["goal"], "tool": call.tool_name})
                 self.sim.event_log.appendleft(f"{agent.name}: model → {call.tool_name}")
                 self.accepted += 1
+                agent.decision_source = "model"
                 self.status[agent.id] = f"model: {call.tool_name}"
                 return call
             except Exception as exc:
@@ -277,6 +278,7 @@ class ModelPolicy(SurvivalPolicy):
                           and agent.current_plan is not None
                           and not agent.current_plan.is_complete())
             if agent.thirst < 85 and agent.hunger < 85 and agent.energy > 30 and not recovering:
+                agent.decision_source = "waiting for model"
                 return ToolCall("observe_surroundings")
         return super().decide(agent)
 

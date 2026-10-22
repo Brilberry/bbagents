@@ -9,18 +9,33 @@ from __future__ import annotations
 
 from collections import Counter, deque
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 import random
 from typing import Any, Iterable
 
 from bbagents import FunctionTool, Observation, Plan, PlanStep, StepStatus, ToolCall, ToolRegistry
-from bbagents.observability import InMemoryTrace
+from bbagents.observability import InMemoryTrace, TraceEvent
 from bbagents.memory import MemoryRecord, MemoryStore
 from bbagents.persistence import InMemoryStateStore
 
 
 Position = tuple[int, int]
+
+
+class IslandTrace(InMemoryTrace):
+    """Framework trace sink with a simulation tick on every event."""
+
+    def __init__(self, simulation) -> None:
+        super().__init__()
+        self.simulation = simulation
+
+    def record(self, event, payload=None) -> None:
+        if isinstance(event, TraceEvent):
+            event = replace(event, attributes={"tick": self.simulation.tick, **event.attributes})
+        else:
+            payload = {"tick": self.simulation.tick, **(payload or {})}
+        super().record(event, payload)
 
 
 class Terrain(str, Enum):
@@ -94,6 +109,9 @@ class Survivor:
     memory: MemoryStore = field(default_factory=MemoryStore)
     next_attack_tick: int = 0
     home: Position | None = None
+    death_tick: int | None = None
+    death_cause: str | None = None
+    decision_source: str = "rule"
 
 
 class Island:
@@ -181,7 +199,8 @@ class Simulation:
         self.day_length = 80
         self.messages: deque[Message] = deque(maxlen=100)
         self.event_log: deque[str] = deque(maxlen=120)
-        self.trace = InMemoryTrace()
+        self.trace = IslandTrace(self)
+        self._recorded_deaths: set[str] = set()
         self.checkpoints = InMemoryStateStore()
         objectives = (
             "Build a safe shelter",
@@ -211,6 +230,7 @@ class Simulation:
         for agent in self.agents:
             self.observe(agent)
             self.policy.replan(agent, "initial objective")
+        self._record_states()
 
     @property
     def is_night(self) -> bool:
@@ -266,8 +286,9 @@ class Simulation:
                 self._advance_sleep(agent)
                 if agent.sleep_remaining:
                     continue
+            agent.decision_source = "rule"
             call = self.policy.decide(agent)
-            self.trace.record("tool.started", {"tick": self.tick, "agent": agent.id, "tool_name": call.tool_name, "arguments": dict(call.arguments)})
+            self.trace.record("tool.started", {"tick": self.tick, "agent": agent.id, "tool_name": call.tool_name, "arguments": dict(call.arguments), "source": agent.decision_source})
             try:
                 result = self.tools[agent.id].execute(call)
                 agent.feedback.append(result)
@@ -294,6 +315,28 @@ class Simulation:
                 self.trace.record("tool.finished", {"tick": self.tick, "agent": agent.id, "tool_name": call.tool_name, "status": "failed", "error": str(exc)})
                 self.policy.replan(agent, f"tool failure: {exc}")
         self._update_predators()
+        self._record_states()
+
+    def _record_states(self) -> None:
+        for agent in self.agents:
+            if not agent.alive and agent.id in self._recorded_deaths:
+                continue
+            self.trace.record("survivor.state", {"agent": agent.id, "name": agent.name,
+                "health": agent.health, "hunger": agent.hunger, "thirst": agent.thirst,
+                "energy": agent.energy, "position": agent.position, "inventory": dict(agent.inventory),
+                "home": agent.home, "sleep_remaining": agent.sleep_remaining,
+                "alive": agent.alive, "last_action": agent.last_action,
+                "plan_goal": agent.current_plan.goal if agent.current_plan else None,
+                "plan_reason": agent.plan_reason,
+                "visible_predators": [{"id": item.id, "kind": item.kind, "position": item.position,
+                                       "health": item.health, "pack_id": item.pack_id}
+                                      for item in self.visible_predators(agent)]})
+            if not agent.alive:
+                agent.death_tick = self.tick
+                agent.death_cause = agent.death_cause or "unknown"
+                self._recorded_deaths.add(agent.id)
+                self.trace.record("survivor.died", {"agent": agent.id, "name": agent.name,
+                    "cause": agent.death_cause or "unknown", "position": agent.position})
 
     def _save_sleep_checkpoint(self, agent: Survivor, status: str) -> None:
         if agent.suspended_plan_key is None:
@@ -448,6 +491,8 @@ class Simulation:
                 agent.home = None
             if agent.alive and self.distance(agent.position, position) <= agent.visibility:
                 agent.feedback.append(result)
+                self.trace.record("calamity.observed", {"agent": agent.id, **result.metadata,
+                                                       "content": result.content})
             if agent.alive and agent.position == position:
                 agent.sheltered = False
                 if agent.sleep_remaining:
@@ -538,6 +583,8 @@ class Simulation:
                     damage *= 0.25
                 target.health = max(0, target.health - damage)
                 target.alive = target.health > 0
+                if not target.alive:
+                    target.death_cause = f"{predator.kind} attack ({predator.id})"
                 if target.sleep_remaining:
                     self._wake(target, "predator attack", interrupted=True)
                 result = Observation("predator.attack", f"{predator.kind} hit for {damage:g} damage",
@@ -611,15 +658,24 @@ class Simulation:
         agent.energy = max(0.0, agent.energy - (0.4 if self.is_night else 0.2))
         agent.sheltered = self.world.tile(agent.position).shelter_owner is not None
         damage = 0.0
+        causes = []
         if agent.hunger >= 90:
             damage += 1.3
+            causes.append("starvation")
         if agent.thirst >= 90:
             damage += 2.1
+            causes.append("dehydration")
         if agent.energy <= 2:
             damage += 0.7
+            causes.append("exhaustion")
+        before = agent.health
         agent.health = max(0.0, agent.health - damage)
+        if damage:
+            self.trace.record("survivor.damage", {"agent": agent.id, "causes": causes,
+                                                "damage": min(before, damage), "health": agent.health})
         if agent.health <= 0:
             agent.alive = False
+            agent.death_cause = ", ".join(causes) or "unknown"
             agent.last_action = "died"
             self.event_log.appendleft(f"Tick {self.tick}: {agent.name} died")
 
@@ -777,6 +833,8 @@ class Simulation:
         envelope = Message(sender.id, recipient.id, message[:240], self.tick)
         recipient.inbox.append(envelope)
         self.messages.appendleft(envelope)
+        self.trace.record("message.sent", {"agent": sender.id, "recipient": recipient.id,
+                                           "message": envelope.text})
         return Observation("communicate", f"told {recipient.name}: {message}", {"recipient": recipient.id})
 
     @staticmethod
