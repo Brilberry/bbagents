@@ -5,9 +5,8 @@ replanning, bounded tools, partial observability, communication, and conflicting
 survival needs. Five autonomous survivors explore a generated island, find water
 and food, gather materials, craft tools, and build shelters.
 
-The included policy is deliberately deterministic and explainable. It can later be
-replaced with a model-backed decision policy without changing the world tools or
-letting model output mutate simulation state directly.
+Run with the deterministic reference policy, or let a local model propose
+persistent milestone plans. Both execute through the same world tools.
 
 From the repository root:
 
@@ -43,30 +42,32 @@ python -m examples.survival_island.app --model YOUR_INSTALLED_MODEL
 Use `--endpoint URL` for another Ollama-compatible `/api/chat` endpoint.
 No provider SDK or API key is required for a local server. A model is not
 downloaded automatically. Requests have a 90-second timeout and run on one
-background worker so rendering continues. One request per agent is allowed in
-flight. Pending agents observe without gaining energy; fatigue, urgent needs and failures use the reference
-policy. Use `ollama list` to choose an installed model, such as `qwen3.5:4b`.
+background worker so rendering continues. At most one gameplay request is in flight
+across all agents. The reference policy keeps survivors active while planning is
+pending and handles urgent survival. Use `ollama list` to select an installed model.
 
-The model proposes a goal, a short plan, and one action. Proposed plans appear in
-the sidebar; each subsequent model response revises that proposal. These are
-advisory plans, not automatically executed action sequences. The reference policy
-retains its own executable plan. Model responses pass tool-name and argument
-validation, then the world applies its ordinary resource and location checks.
-`ContextBuilder` budgets snapshots. `DecisionRuntime` validates a tool-specific
-schema, retries a failed response once, and records standard decision trace events.
-There is no tick-based response expiry. The UI counts accepted proposals and
-failures; per-agent status and the terminal expose errors. Trace events `model.decision` and
-`model.failed` distinguish actual model responses from fallback actions.
+The model returns a goal and 1–6 milestones such as `gather_wood`, `build_shelter`,
+and `rest`. These become a framework `Plan` with dependent `PlanStep` objects.
+Local controllers execute movements, repeated gathering, crafting, and other tools
+until each milestone completes, keeping evidence of progress. `DecisionRuntime`
+validates the milestone schema and retries failures once. Every actual tool call
+still passes live availability and world checks. The UI shows plans, cache hits,
+and failures; traces distinguish model plans from reference-policy actions.
+
+Only plan completion or significant changes request replanning, with a 20-second
+per-survivor planning cooldown. A shared inference gate enforces a three-second
+idle gap after each call, including retries and postmortems. Increase that gap
+using `--inference-cooldown 6`. Routine requests use 8,192 context tokens and an
+8,000-character snapshot budget. A bounded framework `Cache` reuses matching
+strategy proposals; changing relevant state changes the key. Immediate survival
+interrupts preserve model-plan progress. A milestone stalled for 80 actions fails
+and requests replanning rather than running forever.
 
 Energy recovery requires the explicit `rest()` tool: 3 outdoors or 6 in a shelter.
 Observation never restores energy. Moving costs 1.2, gathering/crafting 2, and
 building 6, in addition to passive fatigue. The rule policy rests at 30 energy
-until reaching 70, then resumes work. Requests include explicit legal actions and current-tile
-resources. Framework validation rejects choices unavailable in the snapshot, and
-the main thread checks preconditions again against the live world before acceptance.
-The last eight observations include tool results, failures, and rejected actions
-so the next model request can correct mistakes. Observing depletion removes the
-resource location from personal memory.
+until reaching 70, then resumes work. Local controllers choose legal actions from
+the current world. Observing depletion removes the resource location from memory.
 The most recent failure is retained separately from the recent-observation buffer.
 
 The baseline replenishes
@@ -119,6 +120,9 @@ reports. Deaths also trigger a save. The terminal prints the `index.md` path und
 a unique `survival-runs/` directory. Use `--report-dir PATH` for an explicit location.
 The index links to each survivor's Markdown report and full JSONL history;
 `trace.jsonl` preserves the complete run with ticks and framework correlation IDs.
+Events stream to disk; RAM retains the last 200 ticks, capped at 30,000 events.
+Older histories and final death windows remain readable from disk. Reusing a
+report directory starts a new subdirectory so histories from runs do not mix.
 Reports show per-tick needs, inventory, location, actions, plans, threats, messages,
 damage, death tick, and recorded cause. No model is needed for raw reports.
 

@@ -9,33 +9,18 @@ from __future__ import annotations
 
 from collections import Counter, deque
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import Enum
 import random
 from typing import Any, Iterable
 
 from bbagents import FunctionTool, Observation, Plan, PlanStep, StepStatus, ToolCall, ToolRegistry
-from bbagents.observability import InMemoryTrace, TraceEvent
 from bbagents.memory import MemoryRecord, MemoryStore
 from bbagents.persistence import InMemoryStateStore
+from .tracing import IslandTrace
 
 
 Position = tuple[int, int]
-
-
-class IslandTrace(InMemoryTrace):
-    """Framework trace sink with a simulation tick on every event."""
-
-    def __init__(self, simulation) -> None:
-        super().__init__()
-        self.simulation = simulation
-
-    def record(self, event, payload=None) -> None:
-        if isinstance(event, TraceEvent):
-            event = replace(event, attributes={"tick": self.simulation.tick, **event.attributes})
-        else:
-            payload = {"tick": self.simulation.tick, **(payload or {})}
-        super().record(event, payload)
 
 
 class Terrain(str, Enum):
@@ -291,9 +276,11 @@ class Simulation:
             self.trace.record("tool.started", {"tick": self.tick, "agent": agent.id, "tool_name": call.tool_name, "arguments": dict(call.arguments), "source": agent.decision_source})
             try:
                 result = self.tools[agent.id].execute(call)
+                if hasattr(self.policy, "on_result"):
+                    self.policy.on_result(agent, call, result=result)
                 agent.feedback.append(result)
                 agent.last_action = result.content
-                if agent.current_plan is not None:
+                if agent.current_plan is not None and agent.decision_source != "model plan":
                     active_step = next(
                         (
                             step
@@ -306,6 +293,8 @@ class Simulation:
                         active_step.evidence.append(result.content)
                 self.trace.record("tool.finished", {"tick": self.tick, "agent": agent.id, "tool_name": call.tool_name, "status": "completed", "result": result.content})
             except (ValueError, KeyError) as exc:
+                if hasattr(self.policy, "on_result"):
+                    self.policy.on_result(agent, call, error=exc)
                 agent.feedback.append(Observation("tool.failure", str(exc), {
                     "tool": call.tool_name, "arguments": dict(call.arguments),
                     "position": agent.position, "tick": self.tick,
@@ -321,12 +310,15 @@ class Simulation:
         for agent in self.agents:
             if not agent.alive and agent.id in self._recorded_deaths:
                 continue
+            model_plan = getattr(self.policy, "model_plans", {}).get(agent.id)
+            active_plan = model_plan if agent.decision_source == "model plan" else agent.current_plan
             self.trace.record("survivor.state", {"agent": agent.id, "name": agent.name,
                 "health": agent.health, "hunger": agent.hunger, "thirst": agent.thirst,
                 "energy": agent.energy, "position": agent.position, "inventory": dict(agent.inventory),
                 "home": agent.home, "sleep_remaining": agent.sleep_remaining,
                 "alive": agent.alive, "last_action": agent.last_action,
-                "plan_goal": agent.current_plan.goal if agent.current_plan else None,
+                "plan_goal": active_plan.goal if active_plan else None,
+                "model_plan_goal": model_plan.goal if model_plan else None,
                 "plan_reason": agent.plan_reason,
                 "visible_predators": [{"id": item.id, "kind": item.kind, "position": item.position,
                                        "health": item.health, "pack_id": item.pack_id}

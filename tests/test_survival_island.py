@@ -58,23 +58,21 @@ def test_survivors_live_beyond_original_failure_window() -> None:
 
 def test_model_proposal_is_executed_through_tools() -> None:
     from examples.survival_island.model_policy import ModelPolicy
-
-    simulation = Simulation()
+    simulation = Simulation(agents=1)
     agent = simulation.agents[0]
-    policy = ModelPolicy(simulation, model="fake", requester=lambda *args: {
-        "goal": "Survey terrain", "plan": ["Look around"],
-        "tool": "observe_surroundings", "arguments": {},
-    })
+    policy = ModelPolicy(simulation, model="fake", cooldown=0, requester=lambda *args: {
+        "goal": "Survey terrain", "milestones": ["explore"]})
     try:
         policy.decide(agent)
         policy.pending[agent.id][1].result(timeout=2)
         call = policy.decide(agent)
-        observation = simulation.tools[agent.id].execute(call)
-        assert observation.source == "world"
+        result = simulation.tools[agent.id].execute(call)
+        policy.on_result(agent, call, result=result)
+        assert call.tool_name == "move"
         assert policy.model_plans[agent.id].goal == "Survey terrain"
+        assert policy.model_plans[agent.id].steps[0].evidence
     finally:
         policy.close()
-
 
 def test_predators_arrive_on_schedule():
     simulation = Simulation()
@@ -459,24 +457,18 @@ def test_model_cannot_call_unknown_tool_or_supply_extra_arguments() -> None:
 
 def test_framework_retries_invalid_model_response_and_traces_attempts() -> None:
     from examples.survival_island.model_policy import ModelPolicy
-
-    simulation = Simulation()
+    simulation = Simulation(agents=1)
     calls = []
-
     def requester(*args):
         calls.append(args)
-        return {"goal": "Survey", "plan": ["Look around"],
-                "tool": "bad" if len(calls) == 1 else "observe_surroundings",
-                "arguments": {}}
-
-    policy = ModelPolicy(simulation, model="fake", requester=requester)
+        return {"goal": "Survey", "milestones": ["bad" if len(calls) == 1 else "explore"]}
+    policy = ModelPolicy(simulation, model="fake", cooldown=0, requester=requester)
     try:
         agent = simulation.agents[0]
         policy.decide(agent)
         policy.pending[agent.id][1].result(timeout=2)
-        # A slow response is no longer rejected just because ticks advanced.
         simulation.tick = 100
-        assert policy.decide(agent).tool_name == "observe_surroundings"
+        assert policy.decide(agent).tool_name == "move"
         assert policy.accepted == 1
         assert len(calls) == 2
         assert simulation.trace.events_named("decision.failed")
@@ -484,20 +476,18 @@ def test_framework_retries_invalid_model_response_and_traces_attempts() -> None:
     finally:
         policy.close()
 
-
 def test_model_failure_exposes_reason_in_status() -> None:
+    import pytest
+    from bbagents.decision import DecisionFailure
     from examples.survival_island.model_policy import ModelPolicy
-
     def requester(*args):
         raise RuntimeError("Ollama HTTP 404: model missing")
-
-    simulation = Simulation()
-    policy = ModelPolicy(simulation, model="missing", requester=requester)
+    simulation = Simulation(agents=1)
+    policy = ModelPolicy(simulation, model="missing", cooldown=0, requester=requester)
     try:
         agent = simulation.agents[0]
         policy.decide(agent)
-        import pytest
-        with pytest.raises(Exception):
+        with pytest.raises(DecisionFailure):
             policy.pending[agent.id][1].result(timeout=2)
         policy.decide(agent)
         assert policy.failed == 1
@@ -505,7 +495,6 @@ def test_model_failure_exposes_reason_in_status() -> None:
         assert "model missing" in policy.status[agent.id]
     finally:
         policy.close()
-
 
 def test_available_actions_and_depletion_memory():
     from bbagents import ToolCall
@@ -530,61 +519,51 @@ def test_available_actions_and_depletion_memory():
 
 def test_unavailable_model_action_fails_framework_validation_and_is_fed_back():
     import pytest
+    from bbagents import Observation
+    from bbagents.decision import DecisionFailure
     from examples.survival_island.model_policy import ModelPolicy
-
-    simulation = Simulation()
+    simulation = Simulation(agents=1)
     agent = simulation.agents[0]
-    simulation.world.tile(agent.position).resources.clear()
     snapshots = []
-
+    now = [0.0]
     def requester(endpoint, model, snapshot):
         snapshots.append(snapshot)
-        return {"goal": "Gather", "plan": ["Gather wood"], "tool": "gather",
-                "arguments": {"resource": "wood"}}
-
-    policy = ModelPolicy(simulation, model="fake", requester=requester)
+        return {"goal": "Gather", "tool": "gather", "arguments": {"resource": "wood"}}
+    policy = ModelPolicy(simulation, model="fake", cooldown=0, requester=requester, clock=lambda: now[0])
     try:
         policy.decide(agent)
-        with pytest.raises(Exception):
+        with pytest.raises(DecisionFailure):
             policy.pending[agent.id][1].result(timeout=2)
         policy.decide(agent)
         assert policy.accepted == 0
         assert policy.failed == 1
-        assert agent.inventory["wood"] == 0
         assert simulation.trace.events_named("decision.failed")
-        from bbagents import Observation
         for _ in range(12):
             agent.feedback.append(Observation("world", "Observed idle terrain"))
-        simulation.tick += policy.interval
+        now[0] += policy.interval + 1
         policy.decide(agent)
-        with pytest.raises(Exception):
+        with pytest.raises(DecisionFailure):
             policy.pending[agent.id][1].result(timeout=2)
         assert snapshots[-1]["last_failure"]["source"] == "decision.failure"
-        assert "gather" in snapshots[-1]["last_failure"]["content"]
-        assert "current_tile" in snapshots[-1]
-        assert "available_actions" in snapshots[-1]
+        assert "task_catalog" in snapshots[-1]
     finally:
         policy.close()
 
-
 def test_model_action_rechecked_if_another_agent_depletes_resource():
     from examples.survival_island.model_policy import ModelPolicy
-
-    simulation = Simulation()
+    simulation = Simulation(agents=1)
     agent = simulation.agents[0]
     tile = simulation.world.tile(agent.position)
     tile.resources["wood"] = 1
-    policy = ModelPolicy(simulation, model="fake", requester=lambda *args: {
-        "goal": "Gather", "plan": ["Gather wood"], "tool": "gather",
-        "arguments": {"resource": "wood"}})
+    policy = ModelPolicy(simulation, model="fake", cooldown=0, requester=lambda *args: {
+        "goal": "Gather", "milestones": ["gather_wood"]})
     try:
         policy.decide(agent)
         policy.pending[agent.id][1].result(timeout=2)
         tile.resources["wood"] = 0
         call = policy.decide(agent)
         assert call.tool_name != "gather" or call.arguments.get("resource") != "wood"
-        assert policy.accepted == 0
-        assert simulation.trace.events_named("action.rejected")
-        assert any(item.source == "action.rejected" for item in agent.feedback)
+        assert policy.accepted == 1
+        assert simulation.action_is_available(call, simulation.available_actions(agent))
     finally:
         policy.close()

@@ -9,14 +9,7 @@ from uuid import uuid4
 
 from bbagents import DecisionRequest, DecisionRuntime
 from bbagents.context import ContextBudget, ContextBuilder, ContextItem
-
-
-def event_rows(simulation) -> list[dict]:
-    return [{"event": getattr(event.name, "value", event.name),
-             "timestamp": event.timestamp.isoformat(), "run_id": event.context.run_id,
-             "span_id": event.context.span_id, "parent_span_id": event.context.parent_span_id,
-             **dict(event.attributes)}
-            for event in tuple(simulation.trace.events)]
+from .inference import InferenceGate
 
 
 def survivor_events(rows: list[dict], agent_id: str) -> list[dict]:
@@ -29,16 +22,21 @@ def last_window(events: list[dict], end_tick: int) -> list[dict]:
 
 def write_reports(simulation, directory: Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
-    rows = event_rows(simulation)
-    (directory / "trace.jsonl").write_text(
-        "".join(json.dumps(row, default=str) + "\n" for row in rows), encoding="utf-8")
+    journaled = simulation.trace.directory == directory
+    if journaled:
+        simulation.trace.flush()
+    else:
+        with (directory / "trace.jsonl").open("w", encoding="utf-8") as handle:
+            for row in simulation.trace.iter_rows():
+                handle.write(json.dumps(row, default=str) + "\n")
     index = ["# Survival Island reports", "", f"Simulation stopped/saved at tick {simulation.tick}.", ""]
     for agent in simulation.agents:
-        events = survivor_events(rows, agent.id)
         end = agent.death_tick if agent.death_tick is not None else simulation.tick
-        window = last_window(events, end)
-        (directory / f"{agent.id}.jsonl").write_text(
-            "".join(json.dumps(row, default=str) + "\n" for row in events), encoding="utf-8")
+        window = last_window(simulation.trace.iter_rows(agent.id), end)
+        if not journaled:
+            with (directory / f"{agent.id}.jsonl").open("w", encoding="utf-8") as handle:
+                for row in simulation.trace.iter_rows(agent.id):
+                    handle.write(json.dumps(row, default=str) + "\n")
         damage = sum(row.get("damage", 0) for row in window
                      if row["event"] in {"survivor.damage", "predator.attacked"})
         status = f"Died at tick {agent.death_tick}: {agent.death_cause}" if not agent.alive else "Alive"
@@ -103,15 +101,15 @@ def request_summary(endpoint, model, request):
 
 
 class SummaryModel:
-    def __init__(self, endpoint, model, requester):
-        self.endpoint, self.model, self.requester = endpoint, model, requester
+    def __init__(self, endpoint, model, requester, gate):
+        self.endpoint, self.model, self.requester, self.gate = endpoint, model, requester, gate
 
     def decide(self, request):
-        return self.requester(self.endpoint, self.model, request)
+        return self.gate.run(self.requester, self.endpoint, self.model, request)
 
 
 def summarize(agent_id, name, cause, death_tick, events, directory, *, model, endpoint,
-              trace, requester=request_summary):
+              trace, requester=request_summary, gate=None):
     """Consume an immutable event snapshot, never live survivor/world objects."""
     window = last_window(events, death_tick)
     facts = {"survivor": name, "agent_id": agent_id, "death_tick": death_tick,
@@ -140,7 +138,7 @@ def summarize(agent_id, name, cause, death_tick, events, directory, *, model, en
         metadata={"agent": agent_id, "tick": death_tick, "analysis": "postmortem"})
     report = directory / f"{agent_id}.summary.md"
     try:
-        value = DecisionRuntime(SummaryModel(endpoint, model, requester), trace=trace,
+        value = DecisionRuntime(SummaryModel(endpoint, model, requester, gate or InferenceGate()), trace=trace,
                                 model_id=model).decide(request, retries=1).value
         lines = [f"# Model postmortem: {name}", "", f"Model: {model}. Death tick: {death_tick}.",
                  f"Recorded final cause: {cause}.",
@@ -162,11 +160,15 @@ def summarize(agent_id, name, cause, death_tick, events, directory, *, model, en
 
 class ReportManager:
     def __init__(self, simulation, *, directory=None, model=None,
-                 endpoint="http://localhost:11434/api/chat", requester=request_summary):
+                 endpoint="http://localhost:11434/api/chat", requester=request_summary, gate=None):
         self.simulation = simulation
         self.directory = Path(directory) if directory else Path("survival-runs") / (
             datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:8])
+        if (self.directory / "trace.jsonl").exists():
+            self.directory /= datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:8]
         self.directory.mkdir(parents=True, exist_ok=True)
+        simulation.trace.enable_journal(self.directory)
+        self.gate = gate or getattr(simulation.policy, "gate", None) or InferenceGate()
         self.model, self.endpoint, self.requester = model, endpoint, requester
         self.pool = ThreadPoolExecutor(max_workers=1) if model else None
         self.submitted: set[str] = set()
@@ -182,14 +184,14 @@ class ReportManager:
         if not dead:
             return
         self.save()  # Raw evidence is available before model analysis begins.
-        rows = event_rows(self.simulation)
         for agent in dead:
             self.submitted.add(agent.id)
             if self.pool:
                 self.futures.append(self.pool.submit(summarize, agent.id, agent.name,
-                    agent.death_cause, agent.death_tick, survivor_events(rows, agent.id), self.directory,
+                    agent.death_cause, agent.death_tick,
+                    last_window(self.simulation.trace.iter_rows(agent.id), agent.death_tick), self.directory,
                     model=self.model, endpoint=self.endpoint, trace=self.simulation.trace,
-                    requester=self.requester))
+                    requester=self.requester, gate=self.gate))
 
     def close(self):
         self.update()
@@ -199,3 +201,4 @@ class ReportManager:
                 print("Finishing model postmortems; raw reports are already available.", flush=True)
             self.pool.shutdown(wait=True)
             self.save()  # Include analysis trace events in the exported journal.
+        self.simulation.trace.close()

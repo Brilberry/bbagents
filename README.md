@@ -35,13 +35,14 @@ try it in the world, and use the result to decide what to do next.
 ```mermaid
 flowchart LR
     O["Observe<br/>Needs, inventory, visible terrain,<br/>remembered resources and messages"]
-    D["Decide<br/>Rule policy or local LLM<br/>Choose one available action"]
-    E["Execute<br/>Check the current world<br/>Run the tool if valid"]
+    D["Plan<br/>Rule policy or local LLM<br/>Choose dependent milestones"]
+    E["Execute locally<br/>Choose the next action<br/>Check and run its tool"]
     F["Feedback<br/>Result or rejection<br/>Update the agent's knowledge"]
     O -->|ContextBuilder| D
-    D -->|Validated ToolCall| E
+    D -->|Plan and PlanStep| E
     E -->|Observation| F
-    F -->|Next decision| O
+    F -->|Next action in the plan| E
+    F -.->|Important change or plan finished| O
 ```
 
 For example, Ari needs shelter. She remembers a forest, moves there, and gathers
@@ -53,26 +54,51 @@ where they found a river.
 `bbagents` supplies the building blocks behind this loop:
 
 - **Observation:** `ContextBuilder` assembles a bounded view of the survivor's
-  situation, recent results, and available actions for the model.
-- **Decision:** `DecisionRuntime` validates model output and action preconditions,
-  retries a failed decision once, and records attempts. The rule policy instead
-  follows a `Plan` made of dependent `PlanStep` objects.
+  situation and recent feedback for the model.
+- **Decision:** `DecisionRuntime` validates a goal and 1–6 supported milestones,
+  retries a failed response once, and records attempts. Both policies use `Plan`
+  and dependent `PlanStep` objects; local controllers execute each milestone.
 - **Execution:** `ToolRegistry` exposes actions such as `move`, `gather`, and
   `build`. The game checks their preconditions again before changing the world.
 - **Feedback:** tools return `Observation` objects. Results and failures feed the
   next model request; observed depletion updates the survivor's resource memory.
-  `InMemoryTrace` records the model decisions and tool executions for inspection.
+  The trace sink streams decisions and tool executions to disk for inspection.
 
 You can run entirely with the rule policy or enable a local LLM through Ollama.
-Model requests run in the background while the game continues. Waiting agents
-observe without gaining energy; fatigue, urgent needs and failed requests use the
-rule policy. The sidebar
-shows model proposal counts and errors, with full errors in the terminal.
+The model might return `gather_wood → build_shelter → rest`. That single response
+can drive many movements and tool calls. Milestones keep completion state and
+evidence; predators, fatigue, urgent needs, and night preparation pause model work
+for immediate local responses. The reference policy also keeps agents active
+while planning is pending. The sidebar shows plans, cache hits, and errors.
 
-**Current limitation:** the LLM proposes one action per response. Its longer plan
-is displayed and reconsidered on later responses, but is not automatically
-executed as a sequence. Voice, weather, seasons, and disease are future
-additions.
+Voice, seasons, and disease are future additions.
+
+### Inference and memory use
+
+Model planning is event-driven: an initial or completed plan, new threats or water
+knowledge, a lost home, depleted resources, and action failures can request a new
+plan. There is no model call per action. Each survivor has a 20-second planning
+cooldown, and there is at most one gameplay request in flight across the island.
+Waiting requests are admitted fairly across survivors.
+
+Gameplay, retries, and postmortems share a gate that leaves **three seconds idle
+after each inference call**. Increase it for a quieter machine:
+
+```sh
+python -m examples.survival_island.app --model qwen3.5:4b --inference-cooldown 6
+```
+
+Routine requests use an 8,192-token Ollama context and an 8,000-character snapshot
+budget. `bbagents.optimization.Cache` reuses strategy proposals for matching known
+state, with a 128-entry bound; changing inventory, position, resources, messages,
+or coarse needs changes the key. Cached plans still use live action checks.
+
+The full trace streams to JSONL files. RAM retains only the last 200 ticks of
+events, capped at 30,000 events for unusually busy runs; old histories and
+postmortems are read from disk. The trace file-handle cache is also bounded.
+Plain headless `Simulation()` keeps its reference in-memory trace until a
+`ReportManager` enables journaling. Model inference still uses the GPU, so this
+reduces sustained work rather than guaranteeing silent operation.
 
 ### Predators and defense
 
@@ -169,7 +195,8 @@ This adds three framework demonstrations to the basic decision loop:
 Sleep scheduling and interruption are game-owned tick logic, not framework async
 task cancellation. Checkpoints and memories are in memory for this run; this
 example does not yet restore a saved island after restarting the process. Model
-plans remain advisory; the checkpoint preserves the executable rule-policy plan.
+plans retain their own progress while the checkpoint preserves the rule-policy
+plan used for night preparation and survival responses.
 
 ### Traces and survivor postmortems
 
@@ -178,6 +205,7 @@ save its reports. Reports are also saved when a survivor dies; press **R** to sa
 an intermediate snapshot. The terminal prints the path to `index.md`, which links
 to each survivor's history. By default, every run gets a unique directory under
 `survival-runs/` (ignored by Git).
+Reusing a report directory creates a new run subdirectory to preserve prior logs.
 
 ```sh
 python -m examples.survival_island.app --model qwen3.5:4b \

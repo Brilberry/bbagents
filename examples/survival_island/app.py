@@ -17,7 +17,7 @@ AGENT_COLORS = [(255, 202, 58), (255, 89, 94), (106, 76, 147), (255, 146, 76), (
 
 def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api/chat",
         screenshot: str | None = None, report_dir: str | None = None,
-        postmortems: bool = True) -> None:
+        postmortems: bool = True, inference_cooldown: float = 3.0) -> None:
     try:
         import pygame
     except ImportError as exc:
@@ -32,7 +32,7 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
             sim.step()
     if model:
         from .model_policy import ModelPolicy
-        sim.policy = ModelPolicy(sim, model=model, endpoint=endpoint)
+        sim.policy = ModelPolicy(sim, model=model, endpoint=endpoint, cooldown=inference_cooldown)
     reports = (ReportManager(sim, directory=report_dir, model=model if postmortems else None,
                              endpoint=endpoint) if not screenshot else None)
     screen = pygame.display.set_mode((sim.world.size * tile_size + sidebar, sim.world.size * tile_size))
@@ -126,7 +126,7 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
             population = sum(agent.alive for agent in sim.agents)
             screen.blit(small.render(f"{speed} · Alive {population}/{len(sim.agents)} · Predators {living_predators} · Scroll", True, (150, 155, 160)), (left, 31))
             if model:
-                summary = f"LLM {sim.policy.accepted} accepted / {sim.policy.failed} failed"
+                summary = f"LLM {sim.policy.accepted} plans / {sim.policy.cache_hits} cached / {sim.policy.failed} failed"
                 screen.blit(small.render(summary, True, (190, 210, 230)), (left, 45))
             y = 64
             for index, agent in enumerate(sim.agents[agent_offset:agent_offset + 5], start=agent_offset):
@@ -177,6 +177,9 @@ if __name__ == "__main__":
     parser.add_argument("--screenshot", help="Save a rendered frame after 120 reference-policy ticks and exit")
     parser.add_argument("--report-dir", help="Directory for saved survivor histories (default: unique survival-runs subdirectory)")
     parser.add_argument("--no-postmortem", action="store_true", help="Save traces without generating model death summaries")
+    parser.add_argument("--inference-cooldown", type=float, default=3.0,
+                        help="Minimum idle seconds between model calls (default: 3)")
     args = parser.parse_args()
     run(model=args.model, endpoint=args.endpoint, screenshot=args.screenshot,
-        report_dir=args.report_dir, postmortems=not args.no_postmortem)
+        report_dir=args.report_dir, postmortems=not args.no_postmortem,
+        inference_cooldown=args.inference_cooldown)
