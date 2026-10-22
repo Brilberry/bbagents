@@ -133,6 +133,57 @@ def test_flee_rest_and_shelter_defense():
     assert agent.health > 98
 
 
+def test_observation_never_restores_energy():
+    simulation = Simulation(predator_interval=None)
+    agent = simulation.agents[0]
+    agent.energy = 50
+    agent.last_action = "Observed terrain"
+    simulation.world.tile(agent.position).shelter_owner = agent.id
+    simulation.observe(agent)
+    assert agent.energy == 50
+    simulation._apply_needs(agent)
+    assert agent.energy < 50
+
+
+def test_explicit_rest_recovers_faster_in_shelter():
+    simulation = Simulation(predator_interval=None)
+    agent = simulation.agents[0]
+    agent.energy = 40
+    simulation.rest(agent)
+    assert agent.energy == 43
+    simulation.world.tile(agent.position).shelter_owner = agent.id
+    simulation.rest(agent)
+    assert agent.energy == 49
+
+
+def test_reference_policy_recovers_then_resumes_work():
+    simulation = Simulation(predator_interval=None)
+    agent = simulation.agents[0]
+    agent.energy = 29
+    assert simulation.policy.decide(agent).tool_name == "rest"
+    assert agent.plan_reason == "energy emergency"
+    for _ in range(15):
+        call = simulation.policy.decide(agent)
+        simulation.tools[agent.id].execute(call)
+    assert agent.energy >= 70
+    simulation.policy.decide(agent)
+    assert agent.plan_reason == "resume personal objective"
+
+
+def test_active_agent_energy_cycles_instead_of_staying_full():
+    simulation = Simulation(predator_interval=None)
+    explorer = simulation.agents[3]
+    energies = []
+    rest_count = 0
+    for _ in range(300):
+        simulation.step()
+        energies.append(explorer.energy)
+        rest_count += explorer.last_action == "rested"
+    assert min(energies) < 35
+    assert rest_count > 0
+    assert sum(value > 90 for value in energies) < 40
+
+
 def test_model_cannot_call_unknown_tool_or_supply_extra_arguments() -> None:
     import pytest
     from examples.survival_island.model_policy import validate_decision

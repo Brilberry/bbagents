@@ -347,18 +347,19 @@ class Simulation:
     def rest(self, agent: Survivor) -> Observation:
         if self.visible_predators(agent):
             raise ValueError("cannot rest near a visible predator")
-        agent.energy = min(100, agent.energy + 3)
+        sheltered = self.world.tile(agent.position).shelter_owner is not None
+        recovery = 6 if sheltered else 3
+        agent.energy = min(100, agent.energy + recovery)
         if agent.hunger < 68 and agent.thirst < 64:
             agent.health = min(100, agent.health + 0.5)
-        return Observation("rest", "rested", {"energy": agent.energy, "health": agent.health})
+        return Observation("rest", "rested", {"energy": agent.energy, "health": agent.health,
+                                               "sheltered": sheltered, "recovery": recovery})
 
     def _apply_needs(self, agent: Survivor) -> None:
         agent.hunger = min(100.0, agent.hunger + 0.55)
         agent.thirst = min(100.0, agent.thirst + 0.8)
-        agent.energy = max(0.0, agent.energy - (0.55 if self.is_night else 0.3))
+        agent.energy = max(0.0, agent.energy - (0.4 if self.is_night else 0.2))
         agent.sheltered = self.world.tile(agent.position).shelter_owner is not None
-        if agent.last_action.startswith("Observed"):
-            agent.energy = min(100.0, agent.energy + (2.0 if agent.sheltered else 1.2))
         damage = 0.0
         if agent.hunger >= 90:
             damage += 1.3
@@ -453,7 +454,7 @@ class Simulation:
         if not self.world.passable(target):
             raise ValueError(f"blocked at {target}")
         agent.position = target
-        agent.energy = max(0.0, agent.energy - 0.35)
+        agent.energy = max(0.0, agent.energy - 1.2)
         self.observe(agent)
         return Observation("move", f"moved {direction} to {target}", {"position": target})
 
@@ -468,7 +469,7 @@ class Simulation:
         if tile.resources[resource] == 0:
             agent.known_resources.get(resource, set()).discard(agent.position)
         agent.inventory[resource] += amount
-        agent.energy = max(0.0, agent.energy - 0.7)
+        agent.energy = max(0.0, agent.energy - 2.0)
         return Observation("gather", f"gathered {amount} {resource}", {"resource": resource, "amount": amount})
 
     def craft(self, agent: Survivor, item: str) -> Observation:
@@ -481,6 +482,7 @@ class Simulation:
         for name, count in recipe.items():
             agent.inventory[name] -= count
         agent.inventory[item] += 1
+        agent.energy = max(0.0, agent.energy - 2.0)
         return Observation("craft", f"crafted {item}", {"item": item})
 
     def build(self, agent: Survivor, structure: str) -> Observation:
@@ -493,6 +495,7 @@ class Simulation:
             raise ValueError("shelter requires 10 wood")
         agent.inventory[Resource.WOOD.value] -= 10
         tile.shelter_owner = agent.id
+        agent.energy = max(0.0, agent.energy - 6.0)
         agent.sheltered = True
         self.event_log.appendleft(f"Tick {self.tick}: {agent.name} built a shelter")
         return Observation("build", "built shelter", {"position": agent.position})
@@ -620,7 +623,7 @@ class SurvivalPolicy:
             return "thirst emergency"
         if agent.hunger >= 68:
             return "hunger emergency"
-        if agent.energy <= 15:
+        if agent.energy <= 30:
             return "energy emergency"
         return None
 
@@ -672,7 +675,7 @@ class SurvivalPolicy:
                 return ToolCall("observe_surroundings"), True
             return ToolCall("communicate", {"agent_id": recipient.id, "message": f"river:{water[0]},{water[1]}"}), False
         if sid == "rest":
-            return ToolCall("observe_surroundings"), agent.energy >= 55
+            return ToolCall("rest"), agent.energy >= 70
         if sid == "explore":
             if len(agent.known_tiles) >= int(self.sim.world.size * self.sim.world.size * 0.65):
                 return ToolCall("observe_surroundings"), True

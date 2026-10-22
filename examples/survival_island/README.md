@@ -44,7 +44,7 @@ Use `--endpoint URL` for another Ollama-compatible `/api/chat` endpoint.
 No provider SDK or API key is required for a local server. A model is not
 downloaded automatically. Requests have a 90-second timeout and run on one
 background worker so rendering continues. One request per agent is allowed in
-flight. Pending agents observe/rest; urgent needs and failures use the reference
+flight. Pending agents observe without gaining energy; fatigue, urgent needs and failures use the reference
 policy. Use `ollama list` to choose an installed model, such as `qwen3.5:4b`.
 
 The model proposes a goal, a short plan, and one action. Proposed plans appear in
@@ -58,7 +58,10 @@ There is no tick-based response expiry. The UI counts accepted proposals and
 failures; per-agent status and the terminal expose errors. Trace events `model.decision` and
 `model.failed` distinguish actual model responses from fallback actions.
 
-The baseline supports resting by observing while stationary. Requests include explicit legal actions and current-tile
+Energy recovery requires the explicit `rest()` tool: 3 outdoors or 6 in a shelter.
+Observation never restores energy. Moving costs 1.2, gathering/crafting 2, and
+building 6, in addition to passive fatigue. The rule policy rests at 30 energy
+until reaching 70, then resumes work. Requests include explicit legal actions and current-tile
 resources. Framework validation rejects choices unavailable in the snapshot, and
 the main thread checks preconditions again against the live world before acceptance.
 The last eight observations include tool results, failures, and rejected actions

@@ -65,7 +65,8 @@ where they found a river.
 
 You can run entirely with the rule policy or enable a local LLM through Ollama.
 Model requests run in the background while the game continues. Waiting agents
-observe/rest; urgent needs and failed requests use the rule policy. The sidebar
+observe without gaining energy; fatigue, urgent needs and failed requests use the
+rule policy. The sidebar
 shows model proposal counts and errors, with full errors in the terminal.
 
 **Current limitation:** the LLM proposes one action per response. Its longer plan
@@ -85,6 +86,10 @@ Survivors can `craft("spear")` using three wood, `attack(predator_id)` when
 adjacent, `flee()` two tiles at an energy cost, or `rest()` when no predator is
 visible. A spear deals 25 damage, an axe 12, and bare hands 5. Shelters reduce
 incoming damage by 75%. Rest restores energy and slowly heals fed, hydrated agents.
+Energy falls each tick and with activity: moving costs 1.2, gathering or crafting
+costs 2, and building costs 6. Observation never restores energy. Explicit rest
+restores 3 outdoors or 6 in a shelter. The rule policy interrupts work at 30 energy
+and rests toward 70 before resuming, including while waiting for a model response.
 The rule policy prepares spears when it has wood from tick 200, attacks adjacent
 threats with a spear, and otherwise tries to flee. Immediate defense also overrides
 pending model requests so inference latency does not prevent a response. Model
