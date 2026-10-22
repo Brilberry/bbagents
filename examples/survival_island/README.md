@@ -26,6 +26,11 @@ Controls:
 - `Right arrow`: advance one tick while paused
 - `+` / `-`: simulation speed
 
+The run ends when the last survivor dies. Ticks and new arrivals stop; the window
+stays open on the final state with “Game over”. Space/single-step cannot resume a
+finished run. Reports save automatically, background postmortems finish, and final
+logs are flushed. Headless `Simulation.step()` also becomes a no-op after game over.
+
 The headless simulation does not require pygame:
 
 ```python

@@ -169,6 +169,12 @@ experiments, or set a different positive interval.
 
 ### New arrivals, shelter reuse, and lightning
 
+When the last survivor dies, the run ends immediately: ticks, arrivals, weather,
+and predators stop advancing. The window stays open on the final state with
+“Game over”; pause/resume and single-step cannot restart it. Reports are saved,
+queued model postmortems finish in the background, and final logs are flushed.
+Headless `Simulation.step()` also stops advancing after game over.
+
 Every **1,000 ticks**, another survivor spawns at a random walkable land tile on
 the island's edge. New arrivals have their own identity, tools, limited knowledge,
 plans, and memory. They begin by looking for shelter. Scroll the sidebar with the

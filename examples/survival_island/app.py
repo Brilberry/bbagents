@@ -46,6 +46,8 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
     accumulator = 0.0
     agent_offset = 0
     running = True
+    game_over_handled = False
+    reports_closed = False
 
     try:
         while running:
@@ -56,13 +58,13 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
                 elif event.type == pygame.MOUSEWHEEL:
                     agent_offset = max(0, min(max(0, len(sim.agents) - 5), agent_offset - event.y))
                 elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_SPACE:
+                    if event.key == pygame.K_SPACE and not sim.game_over:
                         paused = not paused
                     elif event.key == pygame.K_ESCAPE:
                         running = False
                     elif event.key == pygame.K_r and reports:
                         reports.save()
-                    elif event.key == pygame.K_RIGHT and paused:
+                    elif event.key == pygame.K_RIGHT and paused and not sim.game_over:
                         sim.step()
                     elif event.key in (pygame.K_PLUS, pygame.K_EQUALS):
                         ticks_per_second = min(40, ticks_per_second + 2)
@@ -73,15 +75,26 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
                     elif event.key == pygame.K_PAGEUP:
                         agent_offset = max(0, agent_offset - 1)
 
-            if not paused:
+            if not paused and not sim.game_over:
                 accumulator += dt
                 interval = 1.0 / ticks_per_second
-                while accumulator >= interval:
+                while accumulator >= interval and not sim.game_over:
                     sim.step()
                     accumulator -= interval
 
-            if reports:
+            if reports and not reports_closed:
                 reports.update()
+
+            if sim.game_over:
+                paused, accumulator = True, 0.0
+                if not game_over_handled:
+                    game_over_handled = True
+                    if hasattr(sim.policy, "close"):
+                        sim.policy.close()
+                    print(f"Game over at tick {sim.tick}: no survivors remain.", flush=True)
+                if reports and not reports_closed and all(future.done() for future in reports.futures):
+                    reports.close()  # Finalize once background postmortems finish, without freezing the UI.
+                    reports_closed = True
 
             screen.fill((20, 22, 25))
             for y, row in enumerate(sim.world.tiles):
@@ -123,7 +136,7 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
             living_predators = sum(predator.alive for predator in sim.predators)
             status = f"Day {sim.tick // sim.day_length + 1} · {'Night' if sim.is_night else 'Daylight'} · Tick {sim.tick}"
             screen.blit(font.render(status, True, (235, 235, 235)), (left, 10))
-            speed = "Paused" if paused else f"Speed {ticks_per_second} ticks/s"
+            speed = "Game over" if sim.game_over else "Paused" if paused else f"Speed {ticks_per_second} ticks/s"
             population = sum(agent.alive for agent in sim.agents)
             screen.blit(small.render(f"{speed} · Alive {population}/{len(sim.agents)} · Predators {living_predators} · Scroll", True, (150, 155, 160)), (left, 31))
             if model:
@@ -179,9 +192,9 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
         pass
     finally:
         pygame.quit()
-        if hasattr(sim.policy, "close"):
+        if not game_over_handled and hasattr(sim.policy, "close"):
             sim.policy.close()
-        if reports:
+        if reports and not reports_closed:
             reports.close()
 
 if __name__ == "__main__":

@@ -224,6 +224,7 @@ class Simulation:
         self.random = random.Random(seed + 1)
         self.intelligence_random = random.Random(seed + 211)
         self.tick = 0
+        self.ended_tick: int | None = None
         self.day_length = 80
         self.messages: deque[Message] = deque(maxlen=100)
         self.event_log: deque[str] = deque(maxlen=120)
@@ -267,6 +268,16 @@ class Simulation:
     def is_night(self) -> bool:
         return self.tick % self.day_length >= int(self.day_length * 0.68)
 
+    @property
+    def game_over(self) -> bool:
+        return self.ended_tick is not None or not any(agent.alive for agent in self.agents)
+
+    def _finish_game(self) -> None:
+        if self.ended_tick is None:
+            self.ended_tick = self.tick
+            self.event_log.appendleft(f"Game over at tick {self.tick}: no survivors remain")
+            self.trace.record("simulation.ended", {"tick": self.tick, "reason": "no survivors remain"})
+
     def _find_spawn(self) -> Position:
         center = self.world.size // 2
         for radius in range(self.world.size):
@@ -293,6 +304,10 @@ class Simulation:
         ])
 
     def step(self) -> None:
+        if self.game_over:
+            self._record_states()
+            self._finish_game()
+            return
         self.tick += 1
         if self.survivor_interval and self.tick % self.survivor_interval == 0:
             self._spawn_survivor()
@@ -351,6 +366,8 @@ class Simulation:
                 self.policy.replan(agent, f"tool failure: {exc}")
         self._update_predators()
         self._record_states()
+        if self.game_over:
+            self._finish_game()
 
     def _record_states(self) -> None:
         for agent in self.agents:
