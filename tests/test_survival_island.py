@@ -134,3 +134,86 @@ def test_model_failure_exposes_reason_in_status() -> None:
         assert "model missing" in policy.status[agent.id]
     finally:
         policy.close()
+
+
+def test_available_actions_and_depletion_memory():
+    from bbagents import ToolCall
+
+    simulation = Simulation()
+    agent = simulation.agents[0]
+    tile = simulation.world.tile(agent.position)
+    tile.resources.clear()
+    tile.resources["wood"] = 1
+    simulation.observe(agent)
+    assert agent.position in agent.known_resources["wood"]
+    assert simulation.action_is_available(ToolCall("gather", {"resource": "wood"}),
+                                          simulation.available_actions(agent))
+    simulation.gather(agent, "wood")
+    assert agent.position not in agent.known_resources["wood"]
+    assert not simulation.action_is_available(ToolCall("gather", {"resource": "wood"}),
+                                              simulation.available_actions(agent))
+    agent.known_resources.setdefault("berries", set()).add(agent.position)
+    simulation.observe(agent)
+    assert agent.position not in agent.known_resources["berries"]
+
+
+def test_unavailable_model_action_fails_framework_validation_and_is_fed_back():
+    import pytest
+    from examples.survival_island.model_policy import ModelPolicy
+
+    simulation = Simulation()
+    agent = simulation.agents[0]
+    simulation.world.tile(agent.position).resources.clear()
+    snapshots = []
+
+    def requester(endpoint, model, snapshot):
+        snapshots.append(snapshot)
+        return {"goal": "Gather", "plan": ["Gather wood"], "tool": "gather",
+                "arguments": {"resource": "wood"}}
+
+    policy = ModelPolicy(simulation, model="fake", requester=requester)
+    try:
+        policy.decide(agent)
+        with pytest.raises(Exception):
+            policy.pending[agent.id][1].result(timeout=2)
+        policy.decide(agent)
+        assert policy.accepted == 0
+        assert policy.failed == 1
+        assert agent.inventory["wood"] == 0
+        assert simulation.trace.events_named("decision.failed")
+        from bbagents import Observation
+        for _ in range(12):
+            agent.feedback.append(Observation("world", "Observed idle terrain"))
+        simulation.tick += policy.interval
+        policy.decide(agent)
+        with pytest.raises(Exception):
+            policy.pending[agent.id][1].result(timeout=2)
+        assert snapshots[-1]["last_failure"]["source"] == "decision.failure"
+        assert "gather" in snapshots[-1]["last_failure"]["content"]
+        assert "current_tile" in snapshots[-1]
+        assert "available_actions" in snapshots[-1]
+    finally:
+        policy.close()
+
+
+def test_model_action_rechecked_if_another_agent_depletes_resource():
+    from examples.survival_island.model_policy import ModelPolicy
+
+    simulation = Simulation()
+    agent = simulation.agents[0]
+    tile = simulation.world.tile(agent.position)
+    tile.resources["wood"] = 1
+    policy = ModelPolicy(simulation, model="fake", requester=lambda *args: {
+        "goal": "Gather", "plan": ["Gather wood"], "tool": "gather",
+        "arguments": {"resource": "wood"}})
+    try:
+        policy.decide(agent)
+        policy.pending[agent.id][1].result(timeout=2)
+        tile.resources["wood"] = 0
+        call = policy.decide(agent)
+        assert call.tool_name != "gather" or call.arguments.get("resource") != "wood"
+        assert policy.accepted == 0
+        assert simulation.trace.events_named("action.rejected")
+        assert any(item.source == "action.rejected" for item in agent.feedback)
+    finally:
+        policy.close()

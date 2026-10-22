@@ -16,7 +16,7 @@ SCRIPTS = sorted(
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda path: path.stem)
-def test_offline_example(script: Path) -> None:
+def test_offline_example(script: Path, tmp_path: Path) -> None:
     if script.stem.startswith("langgraph"):
         pytest.importorskip("langgraph")
     if script.stem.startswith("langchain"):
@@ -27,7 +27,7 @@ def test_offline_example(script: Path) -> None:
             env.pop(key)
     result = subprocess.run(
         [sys.executable, str(script)],
-        cwd=ROOT,
+        cwd=tmp_path if script.stem == "recoverable_release" else ROOT,
         env=env,
         capture_output=True,
         text=True,

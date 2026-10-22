@@ -68,6 +68,8 @@ class Survivor:
     last_action: str = "waiting"
     sheltered: bool = False
     alive: bool = True
+    feedback: deque[Observation] = field(default_factory=lambda: deque(maxlen=8))
+    last_failure: Observation | None = None
 
 
 class Island:
@@ -210,6 +212,7 @@ class Simulation:
             self.trace.record("tool.started", {"tick": self.tick, "agent": agent.id, "tool_name": call.tool_name, "arguments": dict(call.arguments)})
             try:
                 result = self.tools[agent.id].execute(call)
+                agent.feedback.append(result)
                 agent.last_action = result.content
                 if agent.current_plan is not None:
                     active_step = next(
@@ -224,6 +227,11 @@ class Simulation:
                         active_step.evidence.append(result.content)
                 self.trace.record("tool.finished", {"tick": self.tick, "agent": agent.id, "tool_name": call.tool_name, "status": "completed", "result": result.content})
             except (ValueError, KeyError) as exc:
+                agent.feedback.append(Observation("tool.failure", str(exc), {
+                    "tool": call.tool_name, "arguments": dict(call.arguments),
+                    "position": agent.position, "tick": self.tick,
+                }))
+                agent.last_failure = agent.feedback[-1]
                 agent.last_action = f"failed: {exc}"
                 self.trace.record("tool.finished", {"tick": self.tick, "agent": agent.id, "tool_name": call.tool_name, "status": "failed", "error": str(exc)})
                 self.policy.replan(agent, f"tool failure: {exc}")
@@ -256,6 +264,9 @@ class Simulation:
             is_new_river = tile.terrain == Terrain.RIVER and position not in agent.known_tiles
             discovered_river = discovered_river or is_new_river
             agent.known_tiles[position] = tile.terrain
+            for resource, positions in agent.known_resources.items():
+                if tile.resources[resource] <= 0:
+                    positions.discard(position)
             for resource, amount in tile.resources.items():
                 if amount > 0:
                     agent.known_resources.setdefault(resource, set()).add(position)
@@ -268,6 +279,44 @@ class Simulation:
                     if other.id != agent.id and other.alive:
                         self.communicate(agent, other.id, f"river:{river[0]},{river[1]}")
         return Observation("world", f"Observed {len(seen)} tiles and {len(nearby)} nearby agents", {"tiles": seen, "nearby_agents": nearby})
+
+    def available_actions(self, agent: Survivor) -> list[ToolCall]:
+        """Concrete legal calls at this location; message text remains free-form."""
+        tile = self.world.tile(agent.position)
+        calls = [ToolCall("observe_surroundings")]
+        for direction, (dx, dy) in self.DIRECTIONS.items():
+            if self.world.passable((agent.position[0] + dx, agent.position[1] + dy)):
+                calls.append(ToolCall("move", {"direction": direction}))
+        for resource in Resource:
+            if tile.resources[resource.value] > 0:
+                calls.append(ToolCall("gather", {"resource": resource.value}))
+        for item, recipe in {"axe": {"wood": 3, "stone": 1}, "ration": {"berries": 2}}.items():
+            if all(agent.inventory[name] >= count for name, count in recipe.items()):
+                calls.append(ToolCall("craft", {"item": item}))
+        if tile.terrain == Terrain.GRASS and tile.shelter_owner is None and agent.inventory["wood"] >= 10:
+            calls.append(ToolCall("build", {"structure": "shelter"}))
+        for item in ("berries", "ration"):
+            if agent.inventory[item] > 0:
+                calls.append(ToolCall("eat", {"item": item}))
+        if any(self.world.tile(pos).terrain == Terrain.RIVER
+               for pos in self.world.positions_within(agent.position, 1)):
+            calls.append(ToolCall("drink"))
+        for other in self.agents:
+            if other.alive and other.id != agent.id:
+                calls.append(ToolCall("communicate", {"agent_id": other.id, "message": ""}))
+        return calls
+
+    @staticmethod
+    def action_is_available(call: ToolCall, available: list[ToolCall]) -> bool:
+        for candidate in available:
+            if candidate.tool_name != call.tool_name:
+                continue
+            if call.tool_name == "communicate":
+                if candidate.arguments["agent_id"] == call.arguments.get("agent_id"):
+                    return True
+            elif dict(candidate.arguments) == dict(call.arguments):
+                return True
+        return False
 
     def move(self, agent: Survivor, direction: str) -> Observation:
         try:
@@ -290,6 +339,8 @@ class Simulation:
         amount = 2 if resource == Resource.WOOD.value and agent.inventory["axe"] else 1
         amount = min(amount, tile.resources[resource])
         tile.resources[resource] -= amount
+        if tile.resources[resource] == 0:
+            agent.known_resources.get(resource, set()).discard(agent.position)
         agent.inventory[resource] += amount
         agent.energy = max(0.0, agent.energy - 0.7)
         return Observation("gather", f"gathered {amount} {resource}", {"resource": resource, "amount": amount})

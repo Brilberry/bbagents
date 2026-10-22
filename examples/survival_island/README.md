@@ -58,6 +58,14 @@ There is no tick-based response expiry. The UI counts accepted proposals and
 failures; per-agent status and the terminal expose errors. Trace events `model.decision` and
 `model.failed` distinguish actual model responses from fallback actions.
 
-The baseline supports resting by observing while stationary and replenishes
+The baseline supports resting by observing while stationary. Requests include explicit legal actions and current-tile
+resources. Framework validation rejects choices unavailable in the snapshot, and
+the main thread checks preconditions again against the live world before acceptance.
+The last eight observations include tool results, failures, and rejected actions
+so the next model request can correct mistakes. Observing depletion removes the
+resource location from personal memory.
+The most recent failure is retained separately from the recent-observation buffer.
+
+The baseline replenishes
 forest berries each day. This makes sustained survival possible. Weather,
 disease, predators, and voice are not implemented yet.

@@ -55,6 +55,17 @@ The world validates actions before execution. Failed requests expose the actual
 error in the event log and terminal. The sidebar counts accepted model proposals
 and failed requests; acceptance does not guarantee world execution.
 
+Each request includes the current tile's resources and explicit `available_actions`.
+`DecisionRequest.validate` checks the chosen call against those action preconditions
+inside `DecisionRuntime`. The simulation checks again when the response arrives,
+since another survivor may have depleted a resource while the request was running.
+Unavailable proposals produce rejection observations instead of world mutations.
+The latest eight tool results, failures, and rejections are retained as `Observation`
+feedback in the next request. Visible depleted resources are removed from personal
+memory; unseen locations remain remembered until revisited.
+The most recent failure is also retained separately so idle observations cannot
+erase it before the next model request.
+
 **Current limitation:** model plans are advisory and displayed in the sidebar;
 they are revised on subsequent model responses rather than executed as persistent
 action sequences. Rule-policy actions still run between responses. This is a
