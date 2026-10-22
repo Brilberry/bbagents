@@ -3,7 +3,10 @@
 A deterministic 30×30 agent simulation demonstrating long-running plans,
 replanning, bounded tools, partial observability, communication, and conflicting
 survival needs. Five autonomous survivors explore a generated island, find water
-and food, gather materials, craft tools, and build shelters.
+and food, gather materials, craft tools, and build shelters. Three separate lakes
+are spread across different map regions, with seeded sizes/positions and walkable
+shorelines. Survivors can drink from a lake or an adjacent tile and share lake
+locations, rather than all relying on a central river.
 
 Run with the deterministic reference policy, or let a local model propose
 persistent milestone plans. Both execute through the same world tools.

@@ -157,7 +157,7 @@ class ModelPolicy(SurvivalPolicy):
             "wall_cooldown_seconds": seconds})
 
     def _signature(self, agent):
-        return (agent.home, bool(self.nearest_known_terrain(agent, Terrain.RIVER)),
+        return (agent.home, bool(self.nearest_known_terrain(agent, Terrain.LAKE)),
                 tuple(sorted(item.id for item in self.sim.visible_predators(agent))),
                 (agent.last_failure.source, agent.last_failure.content,
                  agent.last_failure.metadata.get("tick")) if agent.last_failure else None)
@@ -232,7 +232,7 @@ class ModelPolicy(SurvivalPolicy):
             "thirst": round(agent.thirst), "energy": round(agent.energy), "home": agent.home,
             "position": agent.position, "inventory": dict(agent.inventory),
             "task_catalog": TASKS, "reason": self.reasons.get(agent.id, "initial or completed plan"),
-            "water": nearest(pos for pos, terrain in agent.known_tiles.items() if terrain == Terrain.RIVER),
+            "water": nearest(pos for pos, terrain in agent.known_tiles.items() if terrain == Terrain.LAKE),
             "resources": {key: nearest(positions) for key, positions in agent.known_resources.items()},
             "known_tiles": [{"position": pos, "terrain": agent.known_tiles[pos].value}
                             for pos in nearest(agent.known_tiles)],
@@ -364,7 +364,7 @@ class ModelPolicy(SurvivalPolicy):
         if task == "drink":
             if agent.thirst < 35:
                 return ToolCall("observe_surroundings"), True
-            water = self.nearest_known_terrain(agent, Terrain.RIVER)
+            water = self.nearest_known_terrain(agent, Terrain.LAKE)
             if water is None:
                 return self._explore(agent), False
             if self.sim.distance(agent.position, water) <= 1:

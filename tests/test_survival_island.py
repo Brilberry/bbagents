@@ -7,7 +7,7 @@ def test_island_has_expected_terrain_and_agents() -> None:
     terrain = {tile.terrain for row in simulation.world.tiles for tile in row}
 
     assert len(simulation.agents) == 5
-    assert {Terrain.GRASS, Terrain.FOREST, Terrain.RIVER, Terrain.MOUNTAIN} <= terrain
+    assert {Terrain.GRASS, Terrain.FOREST, Terrain.LAKE, Terrain.MOUNTAIN} <= terrain
     assert all(len(agent.known_tiles) > 0 for agent in simulation.agents)
 
 
@@ -46,7 +46,7 @@ def test_agents_make_progress_over_long_run() -> None:
     shelters = sum(tile.shelter_owner is not None for row in simulation.world.tiles for tile in row)
     assert gathered > 0
     assert shelters > 0
-    assert any(message.text.startswith("river:") for message in simulation.messages)
+    assert any(message.text.startswith("lake:") for message in simulation.messages)
 
 
 def test_survivors_live_beyond_original_failure_window() -> None:
@@ -392,7 +392,7 @@ def test_sleep_advances_across_ticks_and_restores_saved_plan():
     simulation = Simulation(predator_interval=None)
     agent = simulation.agents[0]
     agent.current_plan = Plan("Explore the northern coast", [
-        PlanStep("done", "Previous work", status=StepStatus.DONE, evidence=["found river"]),
+        PlanStep("done", "Previous work", status=StepStatus.DONE, evidence=["found lake"]),
         PlanStep("explore", "Continue exploration", depends_on=["done"])], version=4)
     agent.plan_reason = "personal goal"
     agent.energy = 30
@@ -409,7 +409,7 @@ def test_sleep_advances_across_ticks_and_restores_saved_plan():
     assert agent.sleep_remaining == 0
     assert agent.current_plan.goal == "Explore the northern coast"
     assert agent.current_plan.version == 4
-    assert agent.current_plan.steps[0].evidence == ["found river"]
+    assert agent.current_plan.steps[0].evidence == ["found lake"]
     agent.current_plan.steps[1].evidence.append("new evidence after resuming")
     assert simulation.checkpoints.load(key).value["plan"]["steps"][1]["evidence"] == []
     assert simulation.checkpoints.load(key).value["status"] == "resumed"

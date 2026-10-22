@@ -9,7 +9,7 @@ from .reporting import ReportManager
 COLORS = {
     Terrain.GRASS: (107, 153, 82),
     Terrain.FOREST: (39, 103, 61),
-    Terrain.RIVER: (52, 131, 196),
+    Terrain.LAKE: (52, 131, 196),
     Terrain.MOUNTAIN: (104, 105, 110),
 }
 AGENT_COLORS = [(255, 202, 58), (255, 89, 94), (106, 76, 147), (255, 146, 76), (25, 190, 180)]

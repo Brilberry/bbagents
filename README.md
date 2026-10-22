@@ -19,10 +19,10 @@ pytest
 
 ## Survival Island example
 
-Five autonomous survivors explore a seeded 30×30 island of forests, rivers,
+Five autonomous survivors explore a seeded 30×30 island of forests, three lakes,
 mountains, and grassland. Each has health, hunger, thirst, energy, an inventory,
 a personal objective, a limited view of the world, remembered terrain and
-resources, and a message inbox. They gather wood and berries, drink from rivers,
+resources, and a message inbox. They gather wood and berries, drink from lakes,
 craft tools, and build shelters while their survival needs change over time.
 
 ![Survival Island after 120 ticks with the reference policy](examples/survival_island/screenshot.png)
@@ -49,7 +49,8 @@ For example, Ari needs shelter. She remembers a forest, moves there, and gathers
 wood. If she becomes thirsty, she can interrupt that work to find water. If another
 survivor has taken the last wood, the gather action is rejected; that feedback
 helps her choose a different action next time. Survivors can also tell each other
-where they found a river.
+where they found a lake. Three separated lakes in different map regions, each
+with a walkable shoreline, provide alternatives to a single central water corridor.
 
 `bbagents` supplies the building blocks behind this loop:
 
