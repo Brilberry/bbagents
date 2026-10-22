@@ -76,11 +76,18 @@ additions.
 
 ### Predators and defense
 
-The first predator arrives at tick 250, with one additional predator every 250
-ticks afterward: two wolves, then a bear, repeating. Defeated animals stay
+The first wolf pack arrives at tick 250, with another arrival every 250 ticks:
+a pack of three wolves, another pack of three wolves, then one lone bear, repeating.
+Defeated animals stay
 defeated; the schedule adds one new animal rather than replacing losses.
 Predators roam, pursue nearby survivors, and act every four ticks. Agents only
 observe predators within their visibility range.
+
+Wolves travel together and share a target when any pack member detects a survivor.
+Each wolf deals only **3 damage** per attack (9 if all three land a hit). Bears
+hunt independently and deal **30 damage** per attack. Separate packs do not share
+targets. The schedule counts arrivals, so a wolf arrival adds three animals and a
+bear arrival adds one; existing predators remain on the island.
 
 Survivors can `craft("spear")` using three wood, `attack(predator_id)` when
 adjacent, `flee()` two tiles at an energy cost, or `rest()` when no predator is

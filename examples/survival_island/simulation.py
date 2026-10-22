@@ -57,6 +57,7 @@ class Predator:
     kind: str
     position: Position
     health: float
+    pack_id: str | None = None
 
     @property
     def alive(self) -> bool:
@@ -162,6 +163,7 @@ class Simulation:
         self.world = Island(size, seed)
         self.predator_interval = predator_interval
         self.predators: list[Predator] = []
+        self.predator_waves = 0
         self.random = random.Random(seed + 1)
         self.tick = 0
         self.day_length = 80
@@ -384,27 +386,55 @@ class Simulation:
             return
         living = [agent for agent in self.agents if agent.alive]
         safe = [pos for pos in positions if all(self.distance(pos, agent.position) >= 6 for agent in living)]
-        kind = "bear" if (len(self.predators) + 1) % 3 == 0 else "wolf"
-        predator = Predator(f"predator-{len(self.predators) + 1}", kind,
-                            self.random.choice(safe or positions), 75 if kind == "bear" else 45)
-        self.predators.append(predator)
-        self.event_log.appendleft(f"Tick {self.tick}: a {kind} arrived")
-        self.trace.record("predator.spawned", {"tick": self.tick, "id": predator.id, "kind": kind})
+        self.predator_waves += 1
+        kind = "bear" if self.predator_waves % 3 == 0 else "wolf"
+        anchor = self.random.choice(safe or positions)
+        pack_id = f"pack-{self.predator_waves}" if kind == "wolf" else None
+        nearby = [pos for pos in self.world.positions_within(anchor, 2)
+                  if self.world.passable(pos) and self.world.tile(pos).terrain != Terrain.RIVER
+                  and all(self.distance(pos, agent.position) >= 4 for agent in living)]
+        nearby.sort(key=lambda pos: self.distance(anchor, pos))
+        for index in range(3 if kind == "wolf" else 1):
+            position = nearby[index % len(nearby)] if nearby else anchor
+            predator = Predator(f"predator-{len(self.predators) + 1}", kind,
+                                position, 75 if kind == "bear" else 45, pack_id)
+            self.predators.append(predator)
+            self.trace.record("predator.spawned", {"tick": self.tick, "id": predator.id,
+                                                   "kind": kind, "pack_id": pack_id})
+        arrival = "a lone bear" if kind == "bear" else "a pack of 3 wolves"
+        self.event_log.appendleft(f"Tick {self.tick}: {arrival} arrived")
 
     def _update_predators(self) -> None:
         # Predators act every four ticks; survivors have time to evade or fight.
         if self.tick % 4:
             return
+        # Each pack selects a shared prey using its nearest member's detection.
+        # A lone bear chooses independently; unrelated predators never coordinate.
+        pack_targets: dict[str, Survivor] = {}
+        leaders: dict[str, Predator] = {}
+        living = [agent for agent in self.agents if agent.alive]
+        if not living:
+            return
+        for predator in self.predators:
+            if not predator.alive or predator.pack_id is None or predator.pack_id in leaders:
+                continue
+            members = [item for item in self.predators if item.alive and item.pack_id == predator.pack_id]
+            leaders[predator.pack_id] = predator
+            prey = min(living, key=lambda agent: min(self.distance(item.position, agent.position) for item in members))
+            if any(self.distance(item.position, prey.position) <= 6 for item in members):
+                pack_targets[predator.pack_id] = prey
         for predator in self.predators:
             if not predator.alive:
                 continue
             living = [agent for agent in self.agents if agent.alive]
             if not living:
                 return
-            target = min(living, key=lambda agent: self.distance(predator.position, agent.position))
+            shared = pack_targets.get(predator.pack_id)
+            target = (shared if shared is not None and shared.alive else
+                      min(living, key=lambda agent: self.distance(predator.position, agent.position)))
             distance = self.distance(predator.position, target.position)
             if distance <= 1:
-                damage = 12 if predator.kind == "bear" else 8
+                damage = 30 if predator.kind == "bear" else 3
                 if self.world.tile(target.position).shelter_owner:
                     damage *= 0.25
                 target.health = max(0, target.health - damage)
@@ -417,15 +447,21 @@ class Simulation:
                 target.last_action = result.content if target.alive else "killed by predator"
                 self.event_log.appendleft(f"Tick {self.tick}: {predator.kind} attacked {target.name}")
                 self.trace.record("predator.attacked", {"tick": self.tick, "agent": target.id,
-                                                        "predator": predator.id, "damage": damage})
+                                                        "predator": predator.id, "damage": damage,
+                                                        "pack_id": predator.pack_id})
                 continue
             neighbors = [(predator.position[0] + dx, predator.position[1] + dy)
                          for dx, dy in self.DIRECTIONS.values()]
             neighbors = [pos for pos in neighbors if self.world.passable(pos)
                          and self.world.tile(pos).terrain != Terrain.RIVER]
             if neighbors:
-                predator.position = (min(neighbors, key=lambda pos: self.distance(pos, target.position))
-                                     if distance <= 6 else self.random.choice(neighbors))
+                if shared is not None or distance <= 6:
+                    predator.position = min(neighbors, key=lambda pos: self.distance(pos, target.position))
+                elif predator.pack_id and leaders[predator.pack_id] is not predator:
+                    leader = leaders[predator.pack_id]
+                    predator.position = min(neighbors, key=lambda pos: self.distance(pos, leader.position))
+                else:
+                    predator.position = self.random.choice(neighbors)
 
     def flee(self, agent: Survivor) -> Observation:
         threats = self.visible_predators(agent)
@@ -508,7 +544,7 @@ class Simulation:
                 for other in self.agents:
                     if other.id != agent.id and other.alive:
                         self.communicate(agent, other.id, f"river:{river[0]},{river[1]}")
-        threats = [{"id": item.id, "kind": item.kind, "position": item.position,
+        threats = [{"id": item.id, "kind": item.kind, "position": item.position, "pack_id": item.pack_id,
                     "health": item.health} for item in self.visible_predators(agent)]
         return Observation("world", f"Observed {len(seen)} tiles and {len(nearby)} nearby agents", {"tiles": seen, "nearby_agents": nearby, "predators": threats})
 

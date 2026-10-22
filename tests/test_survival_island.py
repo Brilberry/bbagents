@@ -82,11 +82,14 @@ def test_predators_arrive_on_schedule():
         simulation.step()
     assert not simulation.predators
     simulation.step()
-    assert len(simulation.predators) == 1
+    assert len(simulation.predators) == 3
+    assert len({item.pack_id for item in simulation.predators}) == 1
     for _ in range(500):
         simulation.step()
-    assert len(simulation.predators) == 3
-    assert [item.kind for item in simulation.predators] == ["wolf", "wolf", "bear"]
+    assert len(simulation.predators) == 7
+    assert [item.kind for item in simulation.predators] == ["wolf"] * 6 + ["bear"]
+    assert simulation.predators[-1].pack_id is None
+    assert simulation.predators[0].pack_id != simulation.predators[3].pack_id
 
 
 def test_survivor_can_craft_spear_and_defeat_predator():
@@ -127,10 +130,53 @@ def test_flee_rest_and_shelter_defense():
         other.alive = False
     simulation.tick = 4
     simulation._update_predators()
-    assert agent.health == 98  # shelter reduces the wolf's 8 damage to 2
+    assert agent.health == 99.25  # shelter reduces the wolf's 3 damage to 0.75
     wolf.health = 0
     simulation.rest(agent)
-    assert agent.health > 98
+    assert agent.health > 99.25
+
+
+def test_wolf_pack_shares_target_while_bear_hunts_independently():
+    from examples.survival_island.simulation import Predator
+
+    simulation = Simulation(predator_interval=None)
+    for row in simulation.world.tiles:
+        for tile in row:
+            tile.terrain = Terrain.GRASS
+            tile.shelter_owner = None
+    first, second = simulation.agents[:2]
+    first.position = (10, 10)
+    second.position = (14, 10)
+    for agent in simulation.agents[2:]:
+        agent.alive = False
+    simulation.predators = [
+        Predator("w1", "wolf", (10, 11), 45, "pack-test"),
+        Predator("w2", "wolf", (13, 10), 45, "pack-test"),
+        Predator("w3", "wolf", (12, 11), 45, "pack-test"),
+        Predator("bear", "bear", (14, 11), 75),
+    ]
+    simulation.tick = 4
+    simulation._update_predators()
+    assert first.health == 97
+    assert second.health == 70  # only the independent bear attacks this survivor
+    assert simulation.predators[1].position == (12, 10)  # joins pack's prey, despite nearby second agent
+
+
+def test_three_adjacent_wolves_deal_less_combined_damage_than_one_bear():
+    from examples.survival_island.simulation import Predator
+
+    simulation = Simulation(predator_interval=None)
+    agent = simulation.agents[0]
+    for other in simulation.agents[1:]:
+        other.alive = False
+    simulation.world.tile(agent.position).shelter_owner = None
+    simulation.predators = [Predator(f"w{i}", "wolf", agent.position, 45, "pack") for i in range(3)]
+    simulation.tick = 4
+    simulation._update_predators()
+    assert agent.health == 91
+    simulation.predators = [Predator("bear", "bear", agent.position, 75)]
+    simulation._update_predators()
+    assert agent.health == 61
 
 
 def test_observation_never_restores_energy():

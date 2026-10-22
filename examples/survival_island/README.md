@@ -73,8 +73,10 @@ The baseline replenishes
 forest berries each day. This makes sustained survival possible. Weather,
 disease and voice are not implemented yet.
 
-Predators arrive starting at tick 250, one more every 250 ticks: two wolves,
-then a bear, repeating. They act every four ticks and are visible to agents only
+Predators arrive starting at tick 250, with another arrival every 250 ticks:
+a pack of three wolves, another pack of three, then a lone bear, repeating.
+Wolves stay together and share prey within each pack, dealing 3 damage per wolf.
+Bears hunt independently and deal 30 damage. They act every four ticks and are visible to agents only
 at close range. Survivors can craft a spear from three wood, attack adjacent
 predators, flee two tiles, or rest to recover when safe. Shelters reduce attacks
 by 75%. Immediate rule-based defense overrides model latency. Wolves and bears

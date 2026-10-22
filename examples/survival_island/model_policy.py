@@ -23,8 +23,11 @@ Also: flee(), attack(predator_id), rest(), craft(item: spear).
 Also: sleep() starts a 12-tick activity. Sleeping agents stop normal actions;
 predators or hunger/thirst reaching 80 interrupt sleep. A shelter improves recovery.
 Sleep episodes and interrupted locations are provided in sleep_memories.
-Predators arrive every 250 ticks starting at tick 250. Visible predators are
-listed with IDs and positions. Flee sprints two tiles for 3 energy; attack costs
+Predators arrive every 250 ticks starting at tick 250: wolves in coordinated
+packs of 3 (3 damage per wolf), or lone bears (30 damage).
+Each arrival is a wolf pack, another wolf pack, then one bear, repeating.
+Visible predators are listed with IDs, pack IDs, and positions.
+Flee sprints two tiles for 3 energy; attack costs
 2 energy and requires an adjacent predator. A spear costs 3 wood and deals
 25 damage; an axe deals 12, bare hands 5. Shelters reduce predator damage by 75%.
 Rest when no predator is visible to restore energy and recover health if fed/hydrated.
@@ -229,6 +232,7 @@ class ModelPolicy(SurvivalPolicy):
                                     "metadata": dict(result.record.metadata)}
                                    for result in agent.memory.retrieve("sleep", limit=4)],
                 "predators": [{"id": predator.id, "kind": predator.kind,
+                               "pack_id": predator.pack_id,
                                "position": predator.position, "health": predator.health}
                               for predator in self.sim.visible_predators(agent)],
                 "thirst": agent.thirst, "energy": agent.energy,

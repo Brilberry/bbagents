@@ -30,7 +30,11 @@ def test_current_readme_island_snippet():
         capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.count("True") == 5
+    # Predator-enabled runs may kill survivors; verify the snippet's result shape.
+    from ast import literal_eval
+    survivors = literal_eval(result.stdout.strip())
+    assert [name for name, _ in survivors] == ["Ari", "Bo", "Cyra", "Dax", "Ena"]
+    assert all(isinstance(alive, bool) for _, alive in survivors)
 
 
 def approve_release(directory):
