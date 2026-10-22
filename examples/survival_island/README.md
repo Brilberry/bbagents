@@ -80,3 +80,20 @@ predators, flee two tiles, or rest to recover when safe. Shelters reduce attacks
 by 75%. Immediate rule-based defense overrides model latency. Wolves and bears
 are marked W and B on the map; combat appears in events and traces.
 Use `Simulation(predator_interval=None)` for a predator-free baseline.
+
+### Sleeping and saved plans
+
+At dusk (tick 44 of each 80-tick cycle), survivors pause their current plan,
+eat/drink as needed, choose a known safe shelter if possible, and wait for night.
+`sleep()` begins a 12-tick activity. Sleeping stops normal action selection;
+the map shows a z and the sidebar shows remaining ticks. Recovery is 2.5 energy
+outdoors or 5 in shelter per tick, less passive fatigue. Visible predators,
+attacks, or hunger/thirst reaching 80 interrupt sleep. Defense and urgent needs
+take priority; the saved plan resumes when safe.
+
+`InMemoryStateStore` checkpoints the original `Plan`, step statuses/evidence, and
+sleep progress using expected versions. `MemoryStore` records sleep episodes;
+preparation avoids shelters associated with predator interruptions. Those memories
+also enter model context. Lifecycle trace events cover suspension, start, progress,
+interruption/completion, and resumption. The application owns tick scheduling;
+this is not framework async task cancellation or restart recovery of the world.

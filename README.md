@@ -98,6 +98,47 @@ actions use the same tools, availability checks, observations, and traces.
 Use `Simulation(predator_interval=None)` to disable predators for baseline
 experiments, or set a different positive interval.
 
+### Sleep, interruption, and resuming work
+
+From tick 44 of each 80-tick day, the rule policy pauses the survivor's current
+plan and prepares for night: eat if hungry, drink if thirsty, reach a known safe
+shelter if one is available, wait for night, then sleep. The same preparation
+policy runs when a local model is enabled. If preparation becomes unsafe, survival
+takes priority and the agent can skip that night's sleep.
+
+```mermaid
+flowchart LR
+    Work[Current plan] --> Save[Checkpoint plan]
+    Save --> Prep[Eat, drink, reach shelter]
+    Prep --> Sleep[Sleep across 12 ticks]
+    Sleep -->|Finished| Resume[Resume saved plan]
+    Sleep -->|Predator or urgent need| Respond[Wake and respond]
+    Respond -->|Safe again| Resume
+```
+
+The `sleep()` tool starts the activity once. The simulation advances it each tick
+without selecting more actions, restoring 2.5 energy outdoors or 5 in shelter
+before passive fatigue. Predators or hunger/thirst reaching 80 wake the agent
+early; a predator attack also interrupts sleep immediately. Sleeping survivors
+show a **z** on the map and a countdown in the sidebar.
+
+This adds three framework demonstrations to the basic decision loop:
+
+- **Versioned checkpoints:** `InMemoryStateStore` saves the suspended plan,
+  including completed steps and their evidence, plus sleep status and progress.
+  Each update supplies the expected version. Once urgent needs and danger are
+  resolved, the survivor restores that plan instead of starting its objective over.
+- **Episodic memory:** `MemoryStore` records where sleep completed or was interrupted.
+  Night preparation consults those memories to avoid shelters associated with
+  predator interruptions; recent sleep memories also enter model requests.
+- **Lifecycle tracing:** `plan.suspended`, `sleep.started`, `sleep.progress`,
+  `sleep.interrupted` / `sleep.completed`, and `plan.resumed` expose the transitions.
+
+Sleep scheduling and interruption are game-owned tick logic, not framework async
+task cancellation. Checkpoints and memories are in memory for this run; this
+example does not yet restore a saved island after restarting the process. Model
+plans remain advisory; the checkpoint preserves the executable rule-policy plan.
+
 ### Run locally
 
 From a checkout of this repository, using Python 3.11 or newer:

@@ -90,6 +90,8 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
             pygame.draw.circle(screen, AGENT_COLORS[index % len(AGENT_COLORS)] if agent.alive else (30, 30, 30), center, 7)
             label = small.render(agent.name[0], True, (10, 10, 10))
             screen.blit(label, label.get_rect(center=center))
+            if agent.sleep_remaining:
+                screen.blit(small.render("z", True, (255, 255, 255)), (center[0] + 5, center[1] - 14))
 
         left = sim.world.size * tile_size + 14
         living_predators = sum(predator.alive for predator in sim.predators)
@@ -111,11 +113,14 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
             inventory = ", ".join(f"{name}:{amount}" for name, amount in agent.inventory.items() if amount) or "empty"
             screen.blit(small.render(f"inventory: {inventory}", True, (180, 185, 190)), (left, y))
             y += 16
-            plan = getattr(sim.policy, "model_plans", {}).get(agent.id, agent.current_plan)
-            ready = plan.next_ready_step().title if plan and plan.next_ready_step() else "complete"
+            plan = (agent.current_plan if agent.suspended_plan_key else
+                    getattr(sim.policy, "model_plans", {}).get(agent.id, agent.current_plan))
+            ready = (f"Sleeping ({agent.sleep_remaining} ticks left)" if agent.sleep_remaining else
+                     plan.next_ready_step().title if plan and plan.next_ready_step() else "complete")
             screen.blit(small.render(f"plan v{plan.version if plan else 0}: {ready}", True, (180, 185, 190)), (left, y))
             y += 16
-            action = getattr(sim.policy, "status", {}).get(agent.id, agent.last_action)[:54]
+            action = (agent.last_action if agent.sleep_remaining else
+                      getattr(sim.policy, "status", {}).get(agent.id, agent.last_action))[:54]
             screen.blit(small.render(action, True, (145, 180, 145)), (left, y))
             y += 24
 

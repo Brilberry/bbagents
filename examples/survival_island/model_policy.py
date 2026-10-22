@@ -20,6 +20,9 @@ gather(resource: wood/berries/stone), craft(item: axe/ration),
 build(structure: shelter), eat(item: berries/ration), drink(),
 communicate(agent_id, message). No other tools or arguments are allowed.
 Also: flee(), attack(predator_id), rest(), craft(item: spear).
+Also: sleep() starts a 12-tick activity. Sleeping agents stop normal actions;
+predators or hunger/thirst reaching 80 interrupt sleep. A shelter improves recovery.
+Sleep episodes and interrupted locations are provided in sleep_memories.
 Predators arrive every 250 ticks starting at tick 250. Visible predators are
 listed with IDs and positions. Flee sprints two tiles for 3 energy; attack costs
 2 energy and requires an adjacent predator. A spear costs 3 wood and deals
@@ -46,7 +49,7 @@ def output_format() -> dict:
     """Discriminated action schema: every tool has exactly its own arguments."""
     variants = []
     specifications = {
-        "observe_surroundings": {}, "drink": {}, "flee": {}, "rest": {},
+        "observe_surroundings": {}, "drink": {}, "flee": {}, "rest": {}, "sleep": {},
         "attack": {"predator_id": None},
         "move": {"direction": ["north", "south", "east", "west"]},
         "gather": {"resource": ["wood", "berries", "stone"]},
@@ -103,7 +106,7 @@ def validate_decision(value: dict) -> ToolCall:
         "observe_surroundings": {}, "move": {"direction": {"north", "south", "east", "west"}},
         "gather": {"resource": {"wood", "berries", "stone"}},
         "craft": {"item": {"axe", "ration", "spear"}}, "build": {"structure": {"shelter"}},
-        "flee": {}, "rest": {}, "attack": {"predator_id": None},
+        "flee": {}, "rest": {}, "sleep": {}, "attack": {"predator_id": None},
         "eat": {"item": {"berries", "ration"}}, "drink": {},
         "communicate": {"agent_id": None, "message": None},
     }
@@ -176,6 +179,10 @@ class ModelPolicy(SurvivalPolicy):
         # Immediate threats use deterministic defense instead of waiting for inference.
         if self.sim.visible_predators(agent):
             return self.defend(agent)
+        if (agent.suspended_plan_key is not None or agent.resume_pending
+                or (self.sim.tick % self.sim.day_length >= 44
+                    and agent.night_cycle != self.sim.tick // self.sim.day_length)):
+            return super().decide(agent)
         pending = self.pending.get(agent.id)
         if pending is not None and pending[1].done():
             _, future = self.pending.pop(agent.id)
@@ -218,6 +225,9 @@ class ModelPolicy(SurvivalPolicy):
                 "id": agent.id, "objective": agent.objective, "tick": self.sim.tick,
                 "night": self.sim.is_night, "position": agent.position,
                 "health": agent.health, "hunger": agent.hunger,
+                "sleep_memories": [{"content": result.record.content,
+                                    "metadata": dict(result.record.metadata)}
+                                   for result in agent.memory.retrieve("sleep", limit=4)],
                 "predators": [{"id": predator.id, "kind": predator.kind,
                                "position": predator.position, "health": predator.health}
                               for predator in self.sim.visible_predators(agent)],

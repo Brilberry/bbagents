@@ -8,6 +8,7 @@ behind the same boundary as the deterministic reference policy used here.
 from __future__ import annotations
 
 from collections import Counter, deque
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 import random
@@ -15,6 +16,8 @@ from typing import Any, Iterable
 
 from bbagents import FunctionTool, Observation, Plan, PlanStep, StepStatus, ToolCall, ToolRegistry
 from bbagents.observability import InMemoryTrace
+from bbagents.memory import MemoryRecord, MemoryStore
+from bbagents.persistence import InMemoryStateStore
 
 
 Position = tuple[int, int]
@@ -82,6 +85,12 @@ class Survivor:
     alive: bool = True
     feedback: deque[Observation] = field(default_factory=lambda: deque(maxlen=8))
     last_failure: Observation | None = None
+    sleep_remaining: int = 0
+    sleep_elapsed: int = 0
+    night_cycle: int = -1
+    suspended_plan_key: str | None = None
+    resume_pending: bool = False
+    memory: MemoryStore = field(default_factory=MemoryStore)
 
 
 class Island:
@@ -159,6 +168,7 @@ class Simulation:
         self.messages: deque[Message] = deque(maxlen=100)
         self.event_log: deque[str] = deque(maxlen=120)
         self.trace = InMemoryTrace()
+        self.checkpoints = InMemoryStateStore()
         objectives = (
             "Build a safe shelter",
             "Secure a reliable water source",
@@ -212,6 +222,7 @@ class Simulation:
             FunctionTool("flee", "Sprint two tiles away from a visible predator", lambda: self.flee(agent)),
             FunctionTool("attack", "Attack an adjacent predator", lambda predator_id: self.attack(agent, predator_id)),
             FunctionTool("rest", "Rest and recover health when safe", lambda: self.rest(agent)),
+            FunctionTool("sleep", "Start a 12-tick sleep; danger or urgent needs wake you", lambda: self.sleep(agent)),
             FunctionTool("communicate", "Send a message to another agent", lambda agent_id, message: self.communicate(agent, agent_id, message)),
         ])
 
@@ -229,7 +240,13 @@ class Simulation:
                 continue
             self._apply_needs(agent)
             if not agent.alive:
+                if agent.sleep_remaining:
+                    self._wake(agent, "death", interrupted=True)
                 continue
+            if agent.sleep_remaining:
+                self._advance_sleep(agent)
+                if agent.sleep_remaining:
+                    continue
             call = self.policy.decide(agent)
             self.trace.record("tool.started", {"tick": self.tick, "agent": agent.id, "tool_name": call.tool_name, "arguments": dict(call.arguments)})
             try:
@@ -258,6 +275,100 @@ class Simulation:
                 self.trace.record("tool.finished", {"tick": self.tick, "agent": agent.id, "tool_name": call.tool_name, "status": "failed", "error": str(exc)})
                 self.policy.replan(agent, f"tool failure: {exc}")
         self._update_predators()
+
+    def _save_sleep_checkpoint(self, agent: Survivor, status: str) -> None:
+        if agent.suspended_plan_key is None:
+            agent.suspended_plan_key = f"sleep:{agent.id}:{self.tick}"
+        key = agent.suspended_plan_key
+        previous = self.checkpoints.load(key)
+        if previous is None:
+            plan = agent.current_plan
+            value = {"plan": {"goal": plan.goal, "version": plan.version,
+                              "steps": [{"id": step.id, "title": step.title,
+                                         "description": step.description,
+                                         "status": step.status.value,
+                                         "depends_on": list(step.depends_on),
+                                         "evidence": list(step.evidence), "error": step.error}
+                                        for step in plan.steps]} if plan else None,
+                     "reason": agent.plan_reason}
+        else:
+            value = dict(previous.value)
+        value.update(status=status, remaining=agent.sleep_remaining,
+                     elapsed=agent.sleep_elapsed, tick=self.tick, position=agent.position)
+        saved = self.checkpoints.save(key, value,
+            expected_version=previous.version if previous else 0)
+        self.trace.record("sleep.checkpoint", {"agent": agent.id, "key": key,
+                                               "version": saved.version, "status": status})
+
+    def sleep(self, agent: Survivor) -> Observation:
+        if agent.sleep_remaining or self.visible_predators(agent) or agent.hunger >= 80 or agent.thirst >= 80:
+            raise ValueError("sleep requires being awake, safe, fed, and hydrated")
+        agent.sleep_remaining = 12
+        agent.sleep_elapsed = 0
+        agent.resume_pending = False
+        agent.night_cycle = self.tick // self.day_length
+        self._save_sleep_checkpoint(agent, "sleeping")
+        if agent.current_plan and agent.current_plan.goal == "Prepare for night":
+            step = agent.current_plan.next_ready_step()
+            if step and step.id == "sleep":
+                step.status = StepStatus.RUNNING
+        self.trace.record("sleep.started", {"agent": agent.id, "tick": self.tick,
+                                            "sheltered": self.world.tile(agent.position).shelter_owner is not None})
+        self.event_log.appendleft(f"{agent.name} started sleeping")
+        return Observation("sleep", "started sleeping (12 ticks)", {"remaining": 12})
+
+    def _advance_sleep(self, agent: Survivor) -> None:
+        reason = ("predator" if self.visible_predators(agent) else
+                  "thirst" if agent.thirst >= 80 else
+                  "hunger" if agent.hunger >= 80 else None)
+        if reason:
+            self._wake(agent, reason, interrupted=True)
+            return
+        sheltered = self.world.tile(agent.position).shelter_owner is not None
+        agent.energy = min(100, agent.energy + (5 if sheltered else 2.5))
+        agent.sleep_remaining -= 1
+        agent.sleep_elapsed += 1
+        agent.last_action = f"sleeping ({agent.sleep_remaining} ticks left)"
+        if not agent.sleep_remaining:
+            self._wake(agent, "finished", interrupted=False)
+        else:
+            self._save_sleep_checkpoint(agent, "sleeping")
+            self.trace.record("sleep.progress", {"agent": agent.id, "remaining": agent.sleep_remaining})
+
+    def _wake(self, agent: Survivor, reason: str, *, interrupted: bool) -> None:
+        agent.sleep_remaining = 0
+        agent.resume_pending = agent.alive
+        status = "interrupted" if interrupted else "completed"
+        if agent.current_plan and agent.current_plan.goal == "Prepare for night":
+            for step in agent.current_plan.steps:
+                if step.id == "sleep" and step.status == StepStatus.RUNNING:
+                    step.status = StepStatus.FAILED if interrupted else StepStatus.DONE
+                    step.error = reason if interrupted else None
+        self._save_sleep_checkpoint(agent, status)
+        result = Observation("sleep", f"woke: {reason}", {"status": status, "tick": self.tick})
+        agent.feedback.append(result)
+        agent.last_action = result.content
+        agent.memory.remember(MemoryRecord(
+            content=f"sleep {status} at {agent.position}: {reason}", source=agent.id,
+            metadata={"position": agent.position, "status": status, "reason": reason,
+                      "tick": self.tick, "sheltered": self.world.tile(agent.position).shelter_owner is not None}))
+        self.trace.record(f"sleep.{status}", {"agent": agent.id, "reason": reason,
+                                              "tick": self.tick, "elapsed": agent.sleep_elapsed})
+        self.event_log.appendleft(f"{agent.name} woke: {reason}")
+
+    def resume_plan(self, agent: Survivor) -> None:
+        saved = self.checkpoints.load(agent.suspended_plan_key) if agent.suspended_plan_key else None
+        if saved and saved.value["plan"]:
+            data = saved.value["plan"]
+            agent.current_plan = Plan(data["goal"], [PlanStep(
+                **{**deepcopy(step), "status": StepStatus(step["status"])}) for step in data["steps"]],
+                version=data["version"])
+            agent.plan_reason = saved.value["reason"]
+        self._save_sleep_checkpoint(agent, "resumed")
+        self.trace.record("plan.resumed", {"agent": agent.id, "checkpoint": agent.suspended_plan_key,
+                                          "tick": self.tick})
+        agent.resume_pending = False
+        agent.suspended_plan_key = None
 
     def visible_predators(self, agent: Survivor) -> list[Predator]:
         return [predator for predator in self.predators if predator.alive
@@ -298,6 +409,8 @@ class Simulation:
                     damage *= 0.25
                 target.health = max(0, target.health - damage)
                 target.alive = target.health > 0
+                if target.sleep_remaining:
+                    self._wake(target, "predator attack", interrupted=True)
                 result = Observation("predator.attack", f"{predator.kind} hit for {damage:g} damage",
                                      {"predator_id": predator.id, "tick": self.tick})
                 target.feedback.append(result)
@@ -404,6 +517,8 @@ class Simulation:
         tile = self.world.tile(agent.position)
         calls = [ToolCall("observe_surroundings")]
         threats = self.visible_predators(agent)
+        if not threats and not agent.sleep_remaining and agent.hunger < 80 and agent.thirst < 80:
+            calls.append(ToolCall("sleep"))
         if threats and agent.energy >= 3:
             calls.append(ToolCall("flee"))
         if not threats:
@@ -541,7 +656,15 @@ class SurvivalPolicy:
         if defense:
             return defense
         emergency = self._emergency(agent)
+        if agent.resume_pending and not emergency:
+            self.sim.resume_plan(agent)
+        if (not emergency and agent.suspended_plan_key is None
+                and self.sim.tick % self.sim.day_length >= 44
+                and agent.night_cycle != self.sim.tick // self.sim.day_length):
+            self.prepare_night(agent)
         if emergency and agent.plan_reason != emergency:
+            if agent.suspended_plan_key and agent.current_plan and agent.current_plan.goal == "Prepare for night":
+                agent.resume_pending = True
             self.replan(agent, emergency)
         elif agent.current_plan is None:
             self.replan(agent, "resume personal objective")
@@ -568,6 +691,19 @@ class SurvivalPolicy:
             self.sim.trace.record("decision.completed", {"tick": self.sim.tick, "agent": agent.id, "reason": agent.plan_reason, "step": step.id, "tool": call.tool_name})
             return call
         return ToolCall("observe_surroundings")
+
+    def prepare_night(self, agent: Survivor) -> None:
+        self.sim._save_sleep_checkpoint(agent, "preparing")
+        agent.night_cycle = self.sim.tick // self.sim.day_length
+        ids = [("prepare-food", "Eat before sleep"), ("prepare-water", "Drink before sleep"),
+               ("sleep-site", "Reach a remembered safe shelter if available"),
+               ("wait-night", "Wait for night"), ("sleep", "Sleep for 12 ticks")]
+        agent.current_plan = Plan("Prepare for night", [PlanStep(
+            sid, title, depends_on=[ids[index - 1][0]] if index else [])
+            for index, (sid, title) in enumerate(ids)])
+        agent.plan_reason = "night preparation"
+        self.sim.trace.record("plan.suspended", {"agent": agent.id,
+            "checkpoint": agent.suspended_plan_key, "tick": self.sim.tick})
 
     def defend(self, agent: Survivor) -> ToolCall | None:
         threats = self.sim.visible_predators(agent)
@@ -629,6 +765,34 @@ class SurvivalPolicy:
 
     def _call_for_step(self, agent: Survivor, step: PlanStep) -> tuple[ToolCall, bool]:
         sid = step.id
+        if sid == "prepare-food":
+            if agent.hunger < 35:
+                return ToolCall("observe_surroundings"), True
+            if agent.inventory["berries"]:
+                return ToolCall("eat", {"item": "berries"}), False
+            return self._collect(agent, "berries", 1)
+        if sid == "prepare-water":
+            if agent.thirst < 35:
+                return ToolCall("observe_surroundings"), True
+            water = self.nearest_known_terrain(agent, Terrain.RIVER)
+            if water is None:
+                return self._explore(agent), False
+            if self.sim.distance(agent.position, water) <= 1:
+                return ToolCall("drink"), False
+            return ToolCall("move", {"direction": self._direction_toward(agent.position, water)}), False
+        if sid == "sleep-site":
+            unsafe = {tuple(result.record.metadata["position"])
+                      for result in agent.memory.retrieve("sleep", limit=8)
+                      if result.record.metadata.get("reason", "").startswith("predator")}
+            site = self._nearest_known(agent, lambda pos:
+                self.sim.world.tile(pos).shelter_owner is not None and pos not in unsafe)
+            if site is None or site == agent.position:
+                return ToolCall("observe_surroundings"), True
+            return ToolCall("move", {"direction": self._direction_toward(agent.position, site)}), False
+        if sid == "wait-night":
+            return ToolCall("observe_surroundings"), self.sim.is_night
+        if sid == "sleep":
+            return ToolCall("sleep"), False
         if sid.startswith("locate-"):
             target = sid.removeprefix("locate-")
             known = self._target(agent, target)
