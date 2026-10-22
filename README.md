@@ -216,11 +216,11 @@ Each directory contains:
 
 - `index.md`: all survivors, their status, death tick, and recorded final cause.
 - `agent-N.md`: that survivor's final needs and events from the last 200 ticks
-  before death (or before the save for living survivors).
+  before death (or before the save for living survivors), plus the optional model
+  postmortem for a deceased survivor—all in one Markdown file.
 - `agent-N.jsonl`: the survivor's full event history, including received messages.
 - `trace.jsonl`: the full run's framework trace, with simulation ticks, timestamps,
   and run/span correlation IDs.
-- `agent-N.summary.md`: an optional model postmortem for a deceased survivor.
 
 The trace includes per-tick health, hunger, thirst, energy, inventory, location,
 sleep, visible threats, plans, tool calls and results, model failures, communications,

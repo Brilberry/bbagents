@@ -126,8 +126,9 @@ report directory starts a new subdirectory so histories from runs do not mix.
 Reports show per-tick needs, inventory, location, actions, plans, threats, messages,
 damage, death tick, and recorded cause. No model is needed for raw reports.
 
-With `--model`, deceased survivors also get `agent-N.summary.md`: a background
-analysis of their final 200 ticks. `ContextBuilder` bounds the model input to
+With `--model`, each deceased survivor's `agent-N.md` also includes a background
+analysis of their final 200 ticks, above the event timeline. No separate summary
+Markdown file is created. `ContextBuilder` bounds the model input to
 60,000 characters and reports omissions; `DecisionRuntime` validates the result
 and its evidence ticks. Summaries separate the recorded cause from possible
 contributors and uncertainty. Failed analysis leaves an error report and preserves

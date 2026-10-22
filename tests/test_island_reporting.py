@@ -68,7 +68,13 @@ def test_reports_save_per_survivor_logs_and_model_postmortem(tmp_path):
     manager.close()
     assert len(requests) == 1
     assert "starvation" in (tmp_path / "agent-1.md").read_text()
-    assert "Ari died from starvation" in (tmp_path / "agent-1.summary.md").read_text()
+    report = (tmp_path / "agent-1.md").read_text()
+    assert "Ari died from starvation" in report
+    assert "## Final 200 ticks" in report
+    assert report.count("## Model postmortem:") == 1
+    assert not list(tmp_path.glob("*.summary.md"))
+    manager.save()  # Repeated exports retain the completed analysis and timeline.
+    assert (tmp_path / "agent-1.md").read_text() == report
     assert "agent-1.md" in (tmp_path / "index.md").read_text()
     rows = [json.loads(line) for line in (tmp_path / "agent-1.jsonl").read_text().splitlines()]
     assert any(row["event"] == "survivor.died" for row in rows)
@@ -85,7 +91,10 @@ def test_invalid_model_evidence_does_not_replace_raw_reports(tmp_path):
         "summary": "Unsupported claim", "likely_contributors": [], "uncertainties": [],
         "evidence_ticks": [999999]})
     manager.close()
-    assert "unavailable" in (tmp_path / "agent-1.summary.md").read_text()
+    report = (tmp_path / "agent-1.md").read_text()
+    assert "unavailable" in report
+    assert "## Final 200 ticks" in report
+    assert not list(tmp_path.glob("*.summary.md"))
     assert "survivor.died" in (tmp_path / "agent-1.jsonl").read_text()
     assert len(simulation.trace.events_named("decision.failed")) == 2
 

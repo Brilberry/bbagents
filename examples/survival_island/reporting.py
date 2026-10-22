@@ -4,12 +4,34 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import json
 from pathlib import Path
+from threading import RLock
 import urllib.request
 from uuid import uuid4
 
 from bbagents import DecisionRequest, DecisionRuntime
 from bbagents.context import ContextBudget, ContextBuilder, ContextItem
 from .inference import InferenceGate
+
+REPORT_LOCK = RLock()
+ANALYSIS_START = "<!-- model-postmortem -->"
+ANALYSIS_END = "<!-- /model-postmortem -->"
+
+
+def saved_analysis(report: Path) -> str:
+    if not report.exists():
+        return ""
+    _, marker, tail = report.read_text(encoding="utf-8").partition(ANALYSIS_START)
+    return tail.partition(ANALYSIS_END)[0].strip() if marker else ""
+
+
+def save_analysis(report: Path, content: str) -> None:
+    # Background inference and foreground saves must not overwrite each other.
+    with REPORT_LOCK:
+        text = report.read_text(encoding="utf-8") if report.exists() else ""
+        before, marker, tail = text.partition(ANALYSIS_START)
+        after = tail.partition(ANALYSIS_END)[2] if marker else ""
+        report.write_text(before + ANALYSIS_START + "\n" + content.strip() + "\n"
+                          + ANALYSIS_END + after, encoding="utf-8")
 
 
 def survivor_events(rows: list[dict], agent_id: str) -> list[dict]:
@@ -21,6 +43,11 @@ def last_window(events: list[dict], end_tick: int) -> list[dict]:
 
 
 def write_reports(simulation, directory: Path) -> None:
+    with REPORT_LOCK:
+        _write_reports(simulation, directory)
+
+
+def _write_reports(simulation, directory: Path) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     journaled = simulation.trace.directory == directory
     if journaled:
@@ -40,15 +67,15 @@ def write_reports(simulation, directory: Path) -> None:
         damage = sum(row.get("damage", 0) for row in window
                      if row["event"] in {"survivor.damage", "predator.attacked"})
         status = f"Died at tick {agent.death_tick}: {agent.death_cause}" if not agent.alive else "Alive"
-        analysis_link = ("If model analysis was enabled, its separate report appears at "
-                         f"[{agent.id}.summary.md]({agent.id}.summary.md) once generated."
+        analysis = saved_analysis(directory / f"{agent.id}.md")
+        analysis_note = ("If model analysis was enabled, its postmortem will appear here once generated."
                          if not agent.alive else "No death analysis: this survivor is alive at this save.")
         lines = [f"# {agent.name} ({agent.id})", "", status, "",
                  f"Final needs: HP {agent.health:.1f}, hunger {agent.hunger:.1f}, "
                  f"thirst {agent.thirst:.1f}, energy {agent.energy:.1f}.",
                  f"Damage recorded in ticks {max(0, end - 199)}–{end}: {damage:.1f}.", "",
                  f"[Full survivor history]({agent.id}.jsonl)", "",
-                 analysis_link, "",
+                 ANALYSIS_START, analysis or analysis_note, ANALYSIS_END, "",
                  "## Final 200 ticks", "", "```jsonl"]
         lines.extend(json.dumps(row, default=str) for row in window)
         lines += ["```", ""]
@@ -136,26 +163,25 @@ def summarize(agent_id, name, cause, death_tick, events, directory, *, model, en
         context=context, schema=PostmortemSchema(),
         validate=lambda value: all(tick in included_ticks for tick in value["evidence_ticks"]),
         metadata={"agent": agent_id, "tick": death_tick, "analysis": "postmortem"})
-    report = directory / f"{agent_id}.summary.md"
+    report = directory / f"{agent_id}.md"
     try:
         value = DecisionRuntime(SummaryModel(endpoint, model, requester, gate or InferenceGate()), trace=trace,
                                 model_id=model).decide(request, retries=1).value
-        lines = [f"# Model postmortem: {name}", "", f"Model: {model}. Death tick: {death_tick}.",
+        lines = [f"## Model postmortem: {name}", "", f"Model: {model}. Death tick: {death_tick}.",
                  f"Recorded final cause: {cause}.",
                  f"Input: {len(window)} events from the final 200 ticks; "
                  f"{context.omitted_items} context items omitted by the budget.", "",
                  "This is a model interpretation; the event log is the evidence.", "", value["summary"],
-                 "", "## Likely contributors", ""]
+                 "", "### Likely contributors", ""]
         lines += [f"- {item}" for item in value["likely_contributors"]]
-        lines += ["", "## Uncertainties", ""]
+        lines += ["", "### Uncertainties", ""]
         lines += [f"- {item}" for item in value["uncertainties"]]
         lines += ["", "Evidence ticks: " + ", ".join(map(str, value["evidence_ticks"])), "",
                   f"[Survivor history]({agent_id}.jsonl)", ""]
-        report.write_text("\n".join(lines), encoding="utf-8")
+        save_analysis(report, "\n".join(lines))
     except Exception as exc:
-        report.write_text(f"# Model postmortem unavailable: {name}\n\n{exc}\n\n"
-                          f"Recorded final cause: {cause}. See [{agent_id}.md]({agent_id}.md).\n",
-                          encoding="utf-8")
+        save_analysis(report, f"## Model postmortem unavailable: {name}\n\n{exc}\n\n"
+                      f"Recorded final cause: {cause}.\n")
 
 
 class ReportManager:

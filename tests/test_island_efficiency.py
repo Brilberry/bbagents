@@ -132,7 +132,7 @@ def test_late_postmortem_uses_disk_history_after_memory_eviction(tmp_path):
     assert len(requests) == 1
     assert "survivor.died" in requests[0].context.content
     assert '"event": "heartbeat"' not in requests[0].context.content
-    assert "Starvation at tick 1" in (tmp_path / "agent-1.summary.md").read_text()
+    assert "Starvation at tick 1" in (tmp_path / "agent-1.md").read_text()
 
 
 def test_survival_emergency_pauses_instead_of_losing_model_plan():
