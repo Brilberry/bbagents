@@ -1,4 +1,4 @@
-"""Exercise the README workflow across real process restarts, without network I/O."""
+"""Exercise the former README release example and current island snippet."""
 
 import os
 from pathlib import Path
@@ -11,8 +11,7 @@ from bbagents.recovery import ExecutionJournal, ExecutionRecord
 
 def run_readme(directory, answer=""):
     root = Path(__file__).resolve().parents[1]
-    readme = (root / "README.md").read_text()
-    code = readme.split("```python\n", 1)[1].split("```", 1)[0]
+    code = (root / "examples/recoverable_release.py").read_text()
     env = {**os.environ, "PYTHONPATH": str(root / "src")}
     result = subprocess.run(
         [sys.executable, "-c", code], cwd=directory, env=env,
@@ -20,6 +19,18 @@ def run_readme(directory, answer=""):
     )
     assert result.returncode == 0, result.stderr
     return result.stdout
+
+
+def test_current_readme_island_snippet():
+    root = Path(__file__).resolve().parents[1]
+    code = (root / "README.md").read_text().split("```python\n", 1)[1].split("```", 1)[0]
+    result = subprocess.run(
+        [sys.executable, "-c", code], cwd=root,
+        env={**os.environ, "PYTHONPATH": str(root / "src")},
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("True") == 5
 
 
 def approve_release(directory):

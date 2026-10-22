@@ -17,113 +17,111 @@ pip install -e '.[dev]'
 pytest
 ```
 
-## Example
+## Survival Island example
 
-An agent proposes a release. Your application must obtain human approval, survive
-restarts, and avoid blindly repeating publication. This runnable example uses a
-local file as a simulated package index; it never publishes to PyPI.
+Five autonomous survivors explore a seeded 30×30 island of forests, rivers,
+mountains, and grassland. Each has health, hunger, thirst, energy, an inventory,
+a personal objective, a limited view of the world, remembered terrain and
+resources, and a message inbox. They gather wood and berries, drink from rivers,
+craft tools, and build shelters while their survival needs change over time.
 
-Run it once to create the approval request, then again to approve or defer.
-Subsequent runs reuse the recorded result. No model or credentials are required:
-the proposed action is fixed here to focus on execution safeguards.
+![Survival Island after 120 ticks with the reference policy](examples/survival_island/screenshot.png)
 
-```python
-import asyncio
-from dataclasses import replace
-from pathlib import Path
+### How it works
 
-from bbagents import Action, ActionResult, ActionStatus
-from bbagents.execution import AsyncActionRuntime, AsyncFunctionAdapter
-from bbagents.intervention import (
-    ActionInterventionPolicy, ActionInterventionService, ActorKind,
-    HumanOrDelegatedAuthority, InterventionDecision, InterventionResponse,
-    InterventionStatus, StateInterventionStore,
-)
-from bbagents.persistence import SQLiteStateStore
-from bbagents.recovery import (
-    ExecutionJournal, RecoverableActionRuntime, Reconciliation, ReconciliationStatus,
-)
+The application owns the simulation loop. On each tick it updates needs, asks a
+policy for one action per living survivor, and executes that action through a
+per-agent `bbagents.ToolRegistry`. `FunctionTool` binds each tool to its survivor;
+world methods enforce resource costs, valid locations, and inventory requirements.
+Tools return `Observation` objects, and `InMemoryTrace` records decisions,
+replanning, execution results, failures, and communicated knowledge.
 
-directory = Path(".release-example")
-directory.mkdir(exist_ok=True)
-store = SQLiteStateStore(directory / "state.db")
-approvals = ActionInterventionService(
-    StateInterventionStore(store), HumanOrDelegatedAuthority(),
-)
-artifact = directory / "bbagents-0.1.0.published"
-receipt = "bbagents 0.1.0 published to the simulated index"
+The reference policy constructs persistent `Plan` objects with dependent
+`PlanStep` objects. An urgent need interrupts the current plan: a thirsty survivor
+locates water, travels there, and drinks before resuming its personal objective.
+Agents share river coordinates through messages. Movement uses pathfinding;
+stationary observation restores energy, shelters improve rest, and forest berries
+replenish each day. Hunger and thirst increase toward 100; energy decreases toward
+zero. Dangerous levels damage health.
 
+An optional local LLM policy sends each survivor's needs, inventory, remembered
+map, resources, messages, previous proposed plan, and latest action result to an
+Ollama-compatible server. The model returns a goal, a short plan, and one tool
+call constrained by a tool-specific JSON schema. `ContextBuilder` budgets each
+snapshot; `DecisionRuntime` validates proposals, retries a failed decision once,
+and traces attempts. A single background worker serves agents in turn. Pending
+agents observe/rest; urgent needs invoke the reference policy. Rendering continues.
+The world validates actions before execution. Failed requests expose the actual
+error in the event log and terminal. The sidebar counts accepted model proposals
+and failed requests; acceptance does not guarantee world execution.
 
-async def publish(action, context):
-    # Exclusive creation makes this simulated publication immutable.
-    with artifact.open("x") as file:
-        file.write(receipt)
-    return receipt
+**Current limitation:** model plans are advisory and displayed in the sidebar;
+they are revised on subsequent model responses rather than executed as persistent
+action sequences. Rule-policy actions still run between responses. This is a
+hybrid prototype, not a simulation wholly controlled by an LLM. Voice, weather,
+seasons, disease, and predators are future additions.
 
+### Run locally
 
-class PackageIndexLookup:
-    async def reconcile(self, action, record):
-        if artifact.exists() and artifact.read_text() == receipt:
-            return Reconciliation(
-                ReconciliationStatus.COMPLETED,
-                ActionResult(ActionStatus.SUCCEEDED, receipt),
-            )
-        # Absence alone does not prove a previous attempt cannot still finish.
-        return Reconciliation(ReconciliationStatus.UNKNOWN)
+From a checkout of this repository, using Python 3.11 or newer:
 
-
-async def main():
-    action = Action(
-        "publish", {"package": "bbagents", "version": "0.1.0"},
-        expected_effect="Publish bbagents 0.1.0 to the simulated index",
-        requires_confirmation=True, idempotency_key="bbagents-0.1.0",
-        metadata={"resource": "simulated-index"},
-    )
-    saved = store.load("release-approval")
-    if saved is None:
-        request = approvals.request(action)
-        store.save("release-approval", {"id": request.id}, expected_version=0)
-        print("Awaiting human approval. Run again to review.")
-        return
-
-    record = approvals.get(saved.value["id"])
-    if record.status == InterventionStatus.PENDING:
-        if input(f"{record.request.summary}? [yes/no] ").strip().lower() != "yes":
-            print("Not approved; nothing published.")
-            return
-        # This CLI trusts its local operator, not model-supplied identity claims.
-        approvals.respond(record.request.id, InterventionResponse(
-            "local-operator", ActorKind.HUMAN, InterventionDecision.APPROVE,
-            record.version,
-        ))
-
-    runtime = RecoverableActionRuntime(
-        AsyncActionRuntime(
-            AsyncFunctionAdapter({"publish": publish}),
-            policy=ActionInterventionPolicy(approvals),
-        ),
-        ExecutionJournal(store), PackageIndexLookup(),
-    )
-    result = await runtime.execute(
-        replace(action, intervention_id=record.request.id),
-        execution_id="publish-bbagents-0.1.0",
-    )
-    print(f"Release result: {result.output if result.success else result.error}")
-
-
-asyncio.run(main())
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[game]'
+python -m examples.survival_island.app
 ```
 
-Approval and execution state survive process restarts. Confirmed results are reused;
-uncertain outcomes require application-owned reconciliation, not automatic replay.
-This is not an exactly-once guarantee. A hosted application must authenticate
-approvers and implement its actual package-index adapter.
+On Windows, activate with `.venv\Scripts\activate` instead. No model or API key is
+needed for the reference policy.
 
-The [release-manager demo](demos/autonomous_release_manager.py) adds repository
-checks, completion gates and optional local-model release notes. For orchestration,
-use these contracts inside LangGraph nodes, including its interrupt/resume flow.
+Controls: **Space** pauses/resumes, **Right arrow** advances a tick while paused,
+and **+ / -** changes simulation speed. The sidebar shows needs, inventory, plans,
+recent actions, and events. The observer sees the full map; agents retain their
+own limited knowledge.
+
+To enable model decisions, start your Ollama server, download a model, and run:
+
+```sh
+ollama pull qwen3.5:9b
+python -m examples.survival_island.app --model qwen3.5:9b
+```
+
+For a remote server:
+
+```sh
+python -m examples.survival_island.app --model qwen3.5:9b \
+  --endpoint http://YOUR_SERVER:11434/api/chat
+```
+
+Local inference has no per-request API charges. Model downloads are explicit.
+Start at 1–2 ticks per second to give the model time to deliberate as needs evolve.
+Requests time out after 90 seconds; there is no tick-based expiry. Five survivors
+share one model on the server. Use a model actually installed on that server
+(`ollama list`), for example `--model qwen3.5:4b`.
+`model.decision` and `model.failed` trace events distinguish model responses from
+reference-policy actions.
+
+The simulation also runs without pygame or a display:
+
+```python
+from examples.survival_island import Simulation
+
+simulation = Simulation(seed=7)
+for _ in range(1000):
+    simulation.step()
+print([(agent.name, agent.alive) for agent in simulation.agents])
+```
+
+Implementation: [simulation](examples/survival_island/simulation.py),
+[model policy](examples/survival_island/model_policy.py),
+[renderer](examples/survival_island/app.py), and
+[tests](tests/test_survival_island.py).
 
 ## Features
+
+The previous README's approval/recovery example is preserved as
+[recoverable_release.py](examples/recoverable_release.py).
 
 - Typed tools, dependency-checked plans, structured model decisions and validation.
 - Per-agent model selection, routing constraints, cost estimates and caching.
