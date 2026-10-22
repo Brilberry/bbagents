@@ -77,22 +77,25 @@ additions.
 ### Predators and defense
 
 The first wolf pack arrives at tick 250, with another arrival every 250 ticks:
-a pack of three wolves, another pack of three wolves, then one lone bear, repeating.
-Defeated animals stay
-defeated; the schedule adds one new animal rather than replacing losses.
-Predators roam, pursue nearby survivors, and act every four ticks. Agents only
+a pack of **2–3 randomly chosen wolves**, another wolf pack, then one lone bear,
+repeating. Defeated animals stay defeated; arrivals do not replace losses.
+Wolves act every four ticks; bears act every two ticks. Agents only
 observe predators within their visibility range.
 
 Wolves travel together and share a target when any pack member detects a survivor.
 Each wolf deals only **3 damage** per attack (9 if all three land a hit). Bears
-hunt independently and deal **30 damage** per attack. Separate packs do not share
-targets. The schedule counts arrivals, so a wolf arrival adds three animals and a
-bear arrival adds one; existing predators remain on the island.
+hunt independently and deal **30 damage** per attack, with **150 health**.
+When members of different wolf packs meet on the same or adjacent tiles, both
+packs merge, including distant packmates, and share a target. Merges can create
+packs larger than three. Bears never join packs.
 
 Survivors can `craft("spear")` using three wood, `attack(predator_id)` when
 adjacent, `flee()` two tiles at an energy cost, or `rest()` when no predator is
 visible. A spear deals 25 damage, an axe 12, and bare hands 5. Shelters reduce
 incoming damage by 75%. Rest restores energy and slowly heals fed, hydrated agents.
+Attacks cost 4 energy and have a three-tick cooldown, so a survivor cannot strike
+repeatedly before a bear responds. The rule policy prefers fleeing when outnumbered,
+injured, or facing a bear without two nearby allies.
 Energy falls each tick and with activity: moving costs 1.2, gathering or crafting
 costs 2, and building costs 6. Observation never restores energy. Explicit rest
 restores 3 outdoors or 6 in a shelter. The rule policy interrupts work at 30 energy
@@ -104,6 +107,28 @@ actions use the same tools, availability checks, observations, and traces.
 
 Use `Simulation(predator_interval=None)` to disable predators for baseline
 experiments, or set a different positive interval.
+
+### New arrivals, shelter reuse, and lightning
+
+Every **1,000 ticks**, another survivor spawns at a random walkable land tile on
+the island's edge. New arrivals have their own identity, tools, limited knowledge,
+plans, and memory. They begin by looking for shelter. Scroll the sidebar with the
+mouse wheel or Page Up / Page Down to inspect more than five survivors.
+
+The `claim_shelter()` tool lets a survivor take an unassigned shelter, one whose
+owner died, or an older shelter its owner no longer calls home. It costs no wood;
+an actively owned home cannot be taken. Builders reuse their existing home rather
+than building a new shelter after each interruption.
+
+**Lightning** has a 0.4% chance each tick (one strike per 250 ticks on average,
+not a fixed schedule). When shelters exist, half of strikes target a shelter;
+the rest hit a random tile. A struck shelter is destroyed, its home assignment
+is cleared, and sleepers on that tile wake immediately. Lightning does not directly
+damage health. A yellow bolt briefly marks the strike, and observations and traces
+record the calamity. Its randomness is seeded for repeatable experiments.
+
+For isolated experiments, `survivor_interval=None` disables new arrivals and
+`lightning_probability=0` disables lightning.
 
 ### Sleep, interruption, and resuming work
 

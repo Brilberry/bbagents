@@ -39,6 +39,7 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
     paused = bool(screenshot)
     ticks_per_second = 8
     accumulator = 0.0
+    agent_offset = 0
     running = True
 
     while running:
@@ -46,6 +47,8 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
+            elif event.type == pygame.MOUSEWHEEL:
+                agent_offset = max(0, min(max(0, len(sim.agents) - 5), agent_offset - event.y))
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_SPACE:
                     paused = not paused
@@ -55,6 +58,10 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
                     ticks_per_second = min(40, ticks_per_second + 2)
                 elif event.key == pygame.K_MINUS:
                     ticks_per_second = max(1, ticks_per_second - 2)
+                elif event.key == pygame.K_PAGEDOWN:
+                    agent_offset = min(max(0, len(sim.agents) - 5), agent_offset + 1)
+                elif event.key == pygame.K_PAGEUP:
+                    agent_offset = max(0, agent_offset - 1)
 
         if not paused:
             accumulator += dt
@@ -75,6 +82,12 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
                     pygame.draw.circle(screen, (196, 54, 92), rect.center, 2)
                 elif tile.resources[Resource.STONE.value] > 0:
                     pygame.draw.circle(screen, (210, 210, 205), rect.center, 3)
+
+        if sim.last_lightning and sim.tick - sim.last_lightning[1] < 8:
+            (lx, ly), _ = sim.last_lightning
+            x, y = lx * tile_size, ly * tile_size
+            pygame.draw.lines(screen, (255, 240, 100), False,
+                              [(x + 15, y + 1), (x + 6, y + 12), (x + 14, y + 10), (x + 5, y + 21)], 3)
 
         for predator in sim.predators:
             if predator.alive:
@@ -98,12 +111,13 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
         status = f"Day {sim.tick // sim.day_length + 1} · {'Night' if sim.is_night else 'Daylight'} · Tick {sim.tick}"
         screen.blit(font.render(status, True, (235, 235, 235)), (left, 10))
         speed = "Paused" if paused else f"Speed {ticks_per_second} ticks/s"
-        screen.blit(small.render(f"{speed} · Predators {living_predators} · SPACE pause · +/-", True, (150, 155, 160)), (left, 31))
+        population = sum(agent.alive for agent in sim.agents)
+        screen.blit(small.render(f"{speed} · Alive {population}/{len(sim.agents)} · Predators {living_predators} · Scroll", True, (150, 155, 160)), (left, 31))
         if model:
             summary = f"LLM {sim.policy.accepted} accepted / {sim.policy.failed} failed"
             screen.blit(small.render(summary, True, (190, 210, 230)), (left, 45))
         y = 64
-        for index, agent in enumerate(sim.agents):
+        for index, agent in enumerate(sim.agents[agent_offset:agent_offset + 5], start=agent_offset):
             color = AGENT_COLORS[index % len(AGENT_COLORS)]
             screen.blit(font.render(f"{agent.name} — {agent.objective}", True, color), (left, y))
             y += 18

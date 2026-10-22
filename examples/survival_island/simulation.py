@@ -92,6 +92,8 @@ class Survivor:
     suspended_plan_key: str | None = None
     resume_pending: bool = False
     memory: MemoryStore = field(default_factory=MemoryStore)
+    next_attack_tick: int = 0
+    home: Position | None = None
 
 
 class Island:
@@ -157,13 +159,23 @@ class Simulation:
     }
 
     def __init__(self, *, size: int = 30, agents: int = 5, seed: int = 7,
-                 predator_interval: int | None = 250) -> None:
+                 predator_interval: int | None = 250,
+                 survivor_interval: int | None = 1000,
+                 lightning_probability: float = 0.004) -> None:
         if predator_interval is not None and predator_interval < 1:
             raise ValueError("predator_interval must be positive or None")
+        if survivor_interval is not None and survivor_interval < 1:
+            raise ValueError("survivor_interval must be positive or None")
+        if not 0 <= lightning_probability <= 1:
+            raise ValueError("lightning_probability must be between 0 and 1")
         self.world = Island(size, seed)
         self.predator_interval = predator_interval
         self.predators: list[Predator] = []
         self.predator_waves = 0
+        self.survivor_interval = survivor_interval
+        self.lightning_probability = lightning_probability
+        self.weather_random = random.Random(seed + 91)
+        self.last_lightning: tuple[Position, int] | None = None
         self.random = random.Random(seed + 1)
         self.tick = 0
         self.day_length = 80
@@ -225,11 +237,16 @@ class Simulation:
             FunctionTool("attack", "Attack an adjacent predator", lambda predator_id: self.attack(agent, predator_id)),
             FunctionTool("rest", "Rest and recover health when safe", lambda: self.rest(agent)),
             FunctionTool("sleep", "Start a 12-tick sleep; danger or urgent needs wake you", lambda: self.sleep(agent)),
+            FunctionTool("claim_shelter", "Claim the unoccupied shelter at this tile", lambda: self.claim_shelter(agent)),
             FunctionTool("communicate", "Send a message to another agent", lambda agent_id, message: self.communicate(agent, agent_id, message)),
         ])
 
     def step(self) -> None:
         self.tick += 1
+        if self.survivor_interval and self.tick % self.survivor_interval == 0:
+            self._spawn_survivor()
+        if self.weather_random.random() < self.lightning_probability:
+            self.lightning_strike()
         if self.predator_interval and self.tick % self.predator_interval == 0:
             self._spawn_predator()
         if self.tick % self.day_length == 0:
@@ -376,6 +393,69 @@ class Simulation:
         return [predator for predator in self.predators if predator.alive
                 and self.distance(agent.position, predator.position) <= agent.visibility]
 
+    def _spawn_survivor(self) -> None:
+        edge = self.world.size - 1
+        positions = [(x, y) for x in range(self.world.size) for y in range(self.world.size)
+                     if (x in (0, edge) or y in (0, edge)) and self.world.passable((x, y))
+                     and self.world.tile((x, y)).terrain != Terrain.RIVER]
+        if not positions:
+            return
+        number = len(self.agents) + 1
+        names = ("Finn", "Gia", "Hale", "Ira", "Juno", "Kai", "Luz")
+        name = names[(number - 6) % len(names)]
+        if number > 12:
+            name += str(number)
+        agent = Survivor(f"agent-{number}", name, self.random.choice(positions), "Build a safe shelter")
+        self.agents.append(agent)
+        self.tools[agent.id] = self._make_tools(agent)
+        self.observe(agent)
+        self.policy.replan(agent, "new arrival")
+        self.event_log.appendleft(f"Tick {self.tick}: {name} washed ashore")
+        self.trace.record("survivor.arrived", {"agent": agent.id, "position": agent.position, "tick": self.tick})
+
+    def shelter_is_available(self, agent: Survivor, position: Position) -> bool:
+        owner_id = self.world.tile(position).shelter_owner
+        if owner_id is None:
+            return False
+        owner = next((item for item in self.agents if item.id == owner_id), None)
+        return owner_id == agent.id or owner is None or not owner.alive or owner.home != position
+
+    def claim_shelter(self, agent: Survivor) -> Observation:
+        if not self.shelter_is_available(agent, agent.position):
+            raise ValueError("no unoccupied shelter here")
+        self.world.tile(agent.position).shelter_owner = agent.id
+        agent.home = agent.position
+        self.event_log.appendleft(f"{agent.name} claimed an empty shelter")
+        return Observation("claim_shelter", "claimed shelter", {"position": agent.position})
+
+    def lightning_strike(self, position: Position | None = None) -> Observation:
+        if position is None:
+            shelters = [(x, y) for y, row in enumerate(self.world.tiles)
+                        for x, tile in enumerate(row) if tile.shelter_owner is not None]
+            # Raised structures attract half the strikes when shelters exist.
+            position = (self.weather_random.choice(shelters)
+                        if shelters and self.weather_random.random() < 0.5 else
+                        (self.weather_random.randrange(self.world.size), self.weather_random.randrange(self.world.size)))
+        if not self.world.in_bounds(position):
+            raise ValueError("lightning target outside island")
+        destroyed = self.world.tile(position).shelter_owner is not None
+        self.world.tile(position).shelter_owner = None
+        self.last_lightning = (position, self.tick)
+        result = Observation("lightning", "lightning destroyed shelter" if destroyed else "lightning struck ground",
+                             {"position": position, "tick": self.tick, "destroyed_shelter": destroyed})
+        for agent in self.agents:
+            if agent.home == position:
+                agent.home = None
+            if agent.alive and self.distance(agent.position, position) <= agent.visibility:
+                agent.feedback.append(result)
+            if agent.alive and agent.position == position:
+                agent.sheltered = False
+                if agent.sleep_remaining:
+                    self._wake(agent, "lightning", interrupted=True)
+        self.event_log.appendleft(f"Tick {self.tick}: {result.content} at {position}")
+        self.trace.record("calamity.lightning", dict(result.metadata))
+        return result
+
     def _spawn_predator(self) -> None:
         edge = self.world.size - 1
         positions = [(x, y) for x in range(self.world.size) for y in range(self.world.size)
@@ -394,19 +474,36 @@ class Simulation:
                   if self.world.passable(pos) and self.world.tile(pos).terrain != Terrain.RIVER
                   and all(self.distance(pos, agent.position) >= 4 for agent in living)]
         nearby.sort(key=lambda pos: self.distance(anchor, pos))
-        for index in range(3 if kind == "wolf" else 1):
+        pack_size = self.random.randint(2, 3) if kind == "wolf" else 1
+        for index in range(pack_size):
             position = nearby[index % len(nearby)] if nearby else anchor
             predator = Predator(f"predator-{len(self.predators) + 1}", kind,
-                                position, 75 if kind == "bear" else 45, pack_id)
+                                position, 150 if kind == "bear" else 45, pack_id)
             self.predators.append(predator)
             self.trace.record("predator.spawned", {"tick": self.tick, "id": predator.id,
                                                    "kind": kind, "pack_id": pack_id})
-        arrival = "a lone bear" if kind == "bear" else "a pack of 3 wolves"
+        arrival = "a lone bear" if kind == "bear" else f"a pack of {pack_size} wolves"
         self.event_log.appendleft(f"Tick {self.tick}: {arrival} arrived")
 
+    def _merge_wolf_packs(self) -> None:
+        wolves = [item for item in self.predators if item.alive and item.kind == "wolf" and item.pack_id]
+        for index, wolf in enumerate(wolves):
+            for other in wolves[index + 1:]:
+                if wolf.pack_id != other.pack_id and self.distance(wolf.position, other.position) <= 1:
+                    old = other.pack_id
+                    new = wolf.pack_id
+                    for member in wolves:
+                        if member.pack_id == old:
+                            member.pack_id = new
+                    size = sum(item.pack_id == new for item in wolves)
+                    self.event_log.appendleft(f"Wolf packs merged: {size} wolves")
+                    self.trace.record("predator.packs_merged", {"tick": self.tick, "pack_id": new,
+                                                               "absorbed": old, "size": size})
+
     def _update_predators(self) -> None:
-        # Predators act every four ticks; survivors have time to evade or fight.
-        if self.tick % 4:
+        self._merge_wolf_packs()
+        # Bears act twice as often as wolves.
+        if self.tick % 2:
             return
         # Each pack selects a shared prey using its nearest member's detection.
         # A lone bear chooses independently; unrelated predators never coordinate.
@@ -425,6 +522,8 @@ class Simulation:
                 pack_targets[predator.pack_id] = prey
         for predator in self.predators:
             if not predator.alive:
+                continue
+            if predator.kind == "wolf" and self.tick % 4:
                 continue
             living = [agent for agent in self.agents if agent.alive]
             if not living:
@@ -462,6 +561,7 @@ class Simulation:
                     predator.position = min(neighbors, key=lambda pos: self.distance(pos, leader.position))
                 else:
                     predator.position = self.random.choice(neighbors)
+        self._merge_wolf_packs()
 
     def flee(self, agent: Survivor) -> Observation:
         threats = self.visible_predators(agent)
@@ -482,11 +582,12 @@ class Simulation:
     def attack(self, agent: Survivor, predator_id: str) -> Observation:
         predator = next((item for item in self.visible_predators(agent)
                          if item.id == predator_id and self.distance(item.position, agent.position) <= 1), None)
-        if predator is None or agent.energy < 2:
-            raise ValueError("attack requires an adjacent live predator and 2 energy")
+        if predator is None or agent.energy < 4 or self.tick < agent.next_attack_tick:
+            raise ValueError("attack requires adjacency, 4 energy, and a completed 3-tick cooldown")
         damage = 25 if agent.inventory["spear"] else 12 if agent.inventory["axe"] else 5
         predator.health = max(0, predator.health - damage)
-        agent.energy -= 2
+        agent.energy -= 4
+        agent.next_attack_tick = self.tick + 3
         outcome = "defeated" if not predator.alive else f"hit for {damage}"
         self.trace.record("predator.defended", {"agent": agent.id, "predator": predator.id,
                                               "damage": damage, "defeated": not predator.alive})
@@ -559,8 +660,10 @@ class Simulation:
             calls.append(ToolCall("flee"))
         if not threats:
             calls.append(ToolCall("rest"))
+        if self.shelter_is_available(agent, agent.position):
+            calls.append(ToolCall("claim_shelter"))
         for predator in threats:
-            if agent.energy >= 2 and self.distance(agent.position, predator.position) <= 1:
+            if agent.energy >= 4 and self.tick >= agent.next_attack_tick and self.distance(agent.position, predator.position) <= 1:
                 calls.append(ToolCall("attack", {"predator_id": predator.id}))
         for direction, (dx, dy) in self.DIRECTIONS.items():
             if self.world.passable((agent.position[0] + dx, agent.position[1] + dy)):
@@ -646,6 +749,7 @@ class Simulation:
             raise ValueError("shelter requires 10 wood")
         agent.inventory[Resource.WOOD.value] -= 10
         tile.shelter_owner = agent.id
+        agent.home = agent.position
         agent.energy = max(0.0, agent.energy - 6.0)
         agent.sheltered = True
         self.event_log.appendleft(f"Tick {self.tick}: {agent.name} built a shelter")
@@ -688,10 +792,17 @@ class SurvivalPolicy:
 
     def decide(self, agent: Survivor) -> ToolCall:
         self._read_messages(agent)
+        if agent.home is None and agent.current_plan and agent.current_plan.goal == "Maintain existing shelter":
+            self.replan(agent, "shelter destroyed")
         defense = self.defend(agent)
         if defense:
             return defense
         emergency = self._emergency(agent)
+        if (not emergency and not agent.suspended_plan_key and agent.home is None
+                and agent.objective.startswith("Build")
+                and agent.current_plan and agent.current_plan.goal != "Claim available shelter"
+                and self._nearest_known(agent, lambda pos: self.sim.shelter_is_available(agent, pos)) is not None):
+            self.replan(agent, "empty shelter discovered")
         if agent.resume_pending and not emergency:
             self.sim.resume_plan(agent)
         if (not emergency and agent.suspended_plan_key is None
@@ -751,11 +862,16 @@ class SurvivalPolicy:
             return None
         nearest = min(threats, key=lambda item: self.sim.distance(agent.position, item.position))
         agent.plan_reason = "predator emergency"
-        if agent.inventory["spear"] and agent.energy >= 2 and self.sim.distance(agent.position, nearest.position) <= 1:
+        allies = sum(other.alive and other.id != agent.id and self.sim.distance(agent.position, other.position) <= 2
+                     for other in self.sim.agents)
+        outmatched = (len(threats) > allies + 1 or (nearest.kind == "bear" and allies < 2)
+                      or agent.health < 55)
+        can_attack = agent.energy >= 4 and self.sim.tick >= agent.next_attack_tick
+        if not outmatched and agent.inventory["spear"] and can_attack and self.sim.distance(agent.position, nearest.position) <= 1:
             return ToolCall("attack", {"predator_id": nearest.id})
         if agent.energy >= 3:
             return ToolCall("flee")
-        if agent.energy >= 2 and self.sim.distance(agent.position, nearest.position) <= 1:
+        if can_attack and self.sim.distance(agent.position, nearest.position) <= 1:
             return ToolCall("attack", {"predator_id": nearest.id})
         return ToolCall("observe_surroundings")
 
@@ -770,6 +886,15 @@ class SurvivalPolicy:
         elif "energy" in reason:
             steps = [PlanStep("rest", "Rest")]
             goal = "Recover energy"
+        elif (agent.objective.startswith("Build") and agent.home is not None
+              and self.sim.world.tile(agent.home).shelter_owner == agent.id):
+            steps = [PlanStep("return-home", "Return to existing shelter")]
+            goal = "Maintain existing shelter"
+        elif (agent.objective.startswith("Build") and self._nearest_known(
+                agent, lambda pos: self.sim.shelter_is_available(agent, pos)) is not None):
+            steps = [PlanStep("reach-empty-shelter", "Reach an unoccupied shelter"),
+                     PlanStep("claim-home", "Claim shelter", depends_on=["reach-empty-shelter"])]
+            goal = "Claim available shelter"
         elif agent.objective.startswith("Secure"):
             steps = [PlanStep("locate-water", "Locate water"), PlanStep("reach-water", "Reach water", depends_on=["locate-water"]), PlanStep("share-water", "Share water location", depends_on=["reach-water"])]
             goal = agent.objective
@@ -801,6 +926,16 @@ class SurvivalPolicy:
 
     def _call_for_step(self, agent: Survivor, step: PlanStep) -> tuple[ToolCall, bool]:
         sid = step.id
+        if sid in {"return-home", "reach-empty-shelter"}:
+            target = (agent.home if sid == "return-home" else self._nearest_known(
+                agent, lambda pos: self.sim.shelter_is_available(agent, pos)))
+            if target is None:
+                return self._explore(agent), False
+            if agent.position == target:
+                return ToolCall("observe_surroundings"), True
+            return ToolCall("move", {"direction": self._direction_toward(agent.position, target)}), False
+        if sid == "claim-home":
+            return ToolCall("claim_shelter"), agent.home == agent.position
         if sid == "prepare-food":
             if agent.hunger < 35:
                 return ToolCall("observe_surroundings"), True

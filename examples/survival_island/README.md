@@ -70,18 +70,30 @@ resource location from personal memory.
 The most recent failure is retained separately from the recent-observation buffer.
 
 The baseline replenishes
-forest berries each day. This makes sustained survival possible. Weather,
-disease and voice are not implemented yet.
+forest berries each day. This makes sustained survival possible. Disease and
+voice are not implemented yet; lightning is the first weather calamity.
 
 Predators arrive starting at tick 250, with another arrival every 250 ticks:
-a pack of three wolves, another pack of three, then a lone bear, repeating.
+a pack of 2–3 random wolves, another pack, then a lone bear, repeating.
 Wolves stay together and share prey within each pack, dealing 3 damage per wolf.
-Bears hunt independently and deal 30 damage. They act every four ticks and are visible to agents only
+Bears have 150 health, hunt independently, and deal 30 damage. Wolves act every
+four ticks and bears every two. Touching wolf packs merge into a larger pack.
+Survivor attacks cost 4 energy and have a three-tick cooldown. Predators are visible to agents only
 at close range. Survivors can craft a spear from three wood, attack adjacent
 predators, flee two tiles, or rest to recover when safe. Shelters reduce attacks
 by 75%. Immediate rule-based defense overrides model latency. Wolves and bears
 are marked W and B on the map; combat appears in events and traces.
 Use `Simulation(predator_interval=None)` for a predator-free baseline.
+
+Every 1,000 ticks a new survivor arrives on a random land tile at the map edge.
+`claim_shelter()` allows free reuse of unassigned/abandoned homes; builders keep
+using a valid existing home. Scroll the sidebar or use Page Up / Page Down to
+inspect arrivals. `survivor_interval=None` disables this population growth.
+
+Lightning has a seeded 0.4% chance per tick. Half of strikes target an existing
+shelter when possible; others hit random tiles. Strikes destroy shelters, clear
+home assignments, and interrupt sleep, but cause no direct health damage.
+A yellow bolt marks the latest strike. Set `lightning_probability=0` to disable it.
 
 ### Sleeping and saved plans
 

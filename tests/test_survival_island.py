@@ -82,14 +82,15 @@ def test_predators_arrive_on_schedule():
         simulation.step()
     assert not simulation.predators
     simulation.step()
-    assert len(simulation.predators) == 3
+    first_pack_size = len(simulation.predators)
+    assert first_pack_size in (2, 3)
     assert len({item.pack_id for item in simulation.predators}) == 1
     for _ in range(500):
         simulation.step()
-    assert len(simulation.predators) == 7
-    assert [item.kind for item in simulation.predators] == ["wolf"] * 6 + ["bear"]
+    assert len(simulation.predators) - first_pack_size - 1 in (2, 3)
+    assert all(item.kind == "wolf" for item in simulation.predators[:-1])
+    assert simulation.predators[-1].kind == "bear"
     assert simulation.predators[-1].pack_id is None
-    assert simulation.predators[0].pack_id != simulation.predators[3].pack_id
 
 
 def test_survivor_can_craft_spear_and_defeat_predator():
@@ -105,9 +106,131 @@ def test_survivor_can_craft_spear_and_defeat_predator():
     assert simulation.policy.decide(agent).tool_name == "attack"
     simulation.tools[agent.id].execute(ToolCall("attack", {"predator_id": wolf.id}))
     assert wolf.health == 20
+    simulation.tick += 3
     simulation.tools[agent.id].execute(ToolCall("attack", {"predator_id": wolf.id}))
     assert not wolf.alive
     assert not simulation.visible_predators(agent)
+
+
+def test_random_pack_sizes_and_contact_merges():
+    from examples.survival_island.simulation import Predator
+
+    sizes = set()
+    for seed in range(12):
+        simulation = Simulation(seed=seed)
+        simulation._spawn_predator()
+        sizes.add(len(simulation.predators))
+    assert sizes == {2, 3}
+    simulation.predators = [
+        Predator("w1", "wolf", (3, 3), 45, "a"),
+        Predator("w2", "wolf", (4, 3), 45, "b"),
+        Predator("w3", "wolf", (5, 3), 45, "c"),
+        Predator("far", "wolf", (25, 25), 45, "far-pack"),
+        Predator("dead", "wolf", (3, 3), 0, "dead-pack"),
+        Predator("bear", "bear", (3, 3), 150),
+    ]
+    simulation._merge_wolf_packs()
+    assert len({item.pack_id for item in simulation.predators[:3]}) == 1
+    assert simulation.predators[3].pack_id == "far-pack"
+    assert simulation.predators[4].pack_id == "dead-pack"
+    assert simulation.predators[5].pack_id is None
+    assert simulation.trace.events_named("predator.packs_merged")
+
+
+def test_attack_cooldown_and_solo_bear_wolf_encounter():
+    import pytest
+    from examples.survival_island.simulation import Predator
+
+    simulation = Simulation(agents=1, predator_interval=None, lightning_probability=0)
+    agent = simulation.agents[0]
+    agent.inventory["spear"] = 1
+    bear = Predator("bear", "bear", agent.position, 150)
+    wolf = Predator("wolf", "wolf", agent.position, 45, "pack")
+    simulation.predators = [bear, wolf]
+    assert simulation.policy.decide(agent).tool_name == "flee"
+    simulation.attack(agent, bear.id)
+    health = bear.health
+    with pytest.raises(ValueError, match="cooldown"):
+        simulation.attack(agent, bear.id)
+    assert bear.health == health
+    for _ in range(20):
+        simulation.tick += 1
+        if not agent.alive:
+            break
+        if simulation.tick >= agent.next_attack_tick and agent.energy >= 4:
+            simulation.attack(agent, bear.id)
+        simulation._update_predators()
+    assert not agent.alive
+    assert bear.alive
+
+
+def test_new_survivors_arrive_at_1000_tick_intervals_with_tools():
+    simulation = Simulation(predator_interval=None, lightning_probability=0)
+    simulation.tick = 998
+    simulation.step()
+    assert len(simulation.agents) == 5
+    simulation.step()
+    newcomer = simulation.agents[-1]
+    assert len(simulation.agents) == 6
+    assert newcomer.id in simulation.tools
+    assert newcomer.current_plan is not None
+    assert len(newcomer.known_tiles) < simulation.world.size ** 2
+    spawn = simulation.trace.events_named("survivor.arrived")[-1].attributes["position"]
+    assert 0 in spawn or simulation.world.size - 1 in spawn
+    simulation.tick = 1999
+    simulation.step()
+    assert len(simulation.agents) == 7
+    assert len({agent.id for agent in simulation.agents}) == 7
+
+
+def test_claim_abandoned_shelter_and_reuse_owned_home():
+    import pytest
+
+    simulation = Simulation(predator_interval=None, lightning_probability=0)
+    owner, claimant = simulation.agents[:2]
+    claimant.objective = "Build a safe shelter"
+    position = claimant.position
+    simulation.world.tile(position).shelter_owner = owner.id
+    owner.home = position
+    with pytest.raises(ValueError, match="unoccupied"):
+        simulation.claim_shelter(claimant)
+    owner.alive = False
+    simulation.observe(claimant)
+    simulation.policy.replan(claimant, "find home")
+    assert simulation.policy.decide(claimant).tool_name == "claim_shelter"
+    simulation.claim_shelter(claimant)
+    simulation.policy.replan(claimant, "resume personal objective")
+    assert claimant.current_plan.goal == "Maintain existing shelter"
+    assert claimant.home == position
+    assert simulation.world.tile(position).shelter_owner == claimant.id
+
+
+def test_lightning_destroys_shelter_and_interrupts_sleep():
+    simulation = Simulation(predator_interval=None, lightning_probability=0)
+    agent = simulation.agents[0]
+    agent.home = agent.position
+    simulation.world.tile(agent.position).shelter_owner = agent.id
+    simulation.sleep(agent)
+    result = simulation.lightning_strike(agent.position)
+    assert result.metadata["destroyed_shelter"]
+    assert simulation.world.tile(agent.position).shelter_owner is None
+    assert agent.home is None
+    assert not agent.sleep_remaining
+    assert agent.resume_pending
+    assert simulation.trace.events_named("calamity.lightning")
+    assert agent.memory.retrieve("sleep")[0].record.metadata["reason"] == "lightning"
+
+
+def test_random_lightning_is_seeded_and_can_be_disabled():
+    results = []
+    for _ in range(2):
+        simulation = Simulation(seed=8, predator_interval=None, lightning_probability=0.05)
+        for _ in range(100):
+            simulation.step()
+        events = simulation.trace.events_named("calamity.lightning")
+        results.append([(item.attributes["tick"], item.attributes["position"]) for item in events])
+    assert results[0] == results[1]
+    assert 0 < len(results[0]) < 100
 
 
 def test_flee_rest_and_shelter_defense():

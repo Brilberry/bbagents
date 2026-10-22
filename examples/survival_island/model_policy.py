@@ -20,15 +20,18 @@ gather(resource: wood/berries/stone), craft(item: axe/ration),
 build(structure: shelter), eat(item: berries/ration), drink(),
 communicate(agent_id, message). No other tools or arguments are allowed.
 Also: flee(), attack(predator_id), rest(), craft(item: spear).
+Also: claim_shelter() takes an abandoned shelter on your tile at no wood cost.
+Reuse your home rather than building duplicate shelters. Lightning can destroy homes.
 Also: sleep() starts a 12-tick activity. Sleeping agents stop normal actions;
 predators or hunger/thirst reaching 80 interrupt sleep. A shelter improves recovery.
 Sleep episodes and interrupted locations are provided in sleep_memories.
 Predators arrive every 250 ticks starting at tick 250: wolves in coordinated
-packs of 3 (3 damage per wolf), or lone bears (30 damage).
+packs of 2-3 (3 damage per wolf), or lone bears (30 damage, 150 health).
+Wolf packs merge when they meet. Bears act every 2 ticks, wolves every 4.
 Each arrival is a wolf pack, another wolf pack, then one bear, repeating.
 Visible predators are listed with IDs, pack IDs, and positions.
 Flee sprints two tiles for 3 energy; attack costs
-2 energy and requires an adjacent predator. A spear costs 3 wood and deals
+4 energy, requires adjacency, and has a 3-tick cooldown. A spear costs 3 wood and deals
 25 damage; an axe deals 12, bare hands 5. Shelters reduce predator damage by 75%.
 Rest when no predator is visible to restore energy and recover health if fed/hydrated.
 Hunger/thirst increase toward 100; energy decreases toward 0. Stay alive first.
@@ -52,7 +55,7 @@ def output_format() -> dict:
     """Discriminated action schema: every tool has exactly its own arguments."""
     variants = []
     specifications = {
-        "observe_surroundings": {}, "drink": {}, "flee": {}, "rest": {}, "sleep": {},
+        "observe_surroundings": {}, "drink": {}, "flee": {}, "rest": {}, "sleep": {}, "claim_shelter": {},
         "attack": {"predator_id": None},
         "move": {"direction": ["north", "south", "east", "west"]},
         "gather": {"resource": ["wood", "berries", "stone"]},
@@ -109,7 +112,7 @@ def validate_decision(value: dict) -> ToolCall:
         "observe_surroundings": {}, "move": {"direction": {"north", "south", "east", "west"}},
         "gather": {"resource": {"wood", "berries", "stone"}},
         "craft": {"item": {"axe", "ration", "spear"}}, "build": {"structure": {"shelter"}},
-        "flee": {}, "rest": {}, "sleep": {}, "attack": {"predator_id": None},
+        "flee": {}, "rest": {}, "sleep": {}, "claim_shelter": {}, "attack": {"predator_id": None},
         "eat": {"item": {"berries", "ration"}}, "drink": {},
         "communicate": {"agent_id": None, "message": None},
     }
@@ -237,6 +240,7 @@ class ModelPolicy(SurvivalPolicy):
                               for predator in self.sim.visible_predators(agent)],
                 "thirst": agent.thirst, "energy": agent.energy,
                 "inventory": dict(agent.inventory), "last_result": agent.last_action,
+                "home": agent.home, "next_attack_tick": agent.next_attack_tick,
                 "current_tile": {"terrain": tile.terrain.value,
                                  "resources": dict(tile.resources), "shelter": tile.shelter_owner},
                 "available_actions": [{"tool": call.tool_name, "arguments": dict(call.arguments)}
