@@ -56,7 +56,7 @@ where they found a river.
 - **Observation:** `ContextBuilder` assembles a bounded view of the survivor's
   situation and recent feedback for the model.
 - **Decision:** `DecisionRuntime` validates a goal and 1–6 supported milestones,
-  retries a failed response once, and records attempts. Both policies use `Plan`
+  records attempts, and defers failed responses until the next eligibility window. Both policies use `Plan`
   and dependent `PlanStep` objects; local controllers execute each milestone.
 - **Execution:** `ToolRegistry` exposes actions such as `move`, `gather`, and
   `build`. The game checks their preconditions again before changing the world.
@@ -77,9 +77,19 @@ Voice, seasons, and disease are future additions.
 
 Model planning is event-driven: an initial or completed plan, new threats or water
 knowledge, a lost home, depleted resources, and action failures can request a new
-plan. There is no model call per action. Each survivor has a 20-second planning
-cooldown, and there is at most one gameplay request in flight across the island.
-Waiting requests are admitted fairly across survivors.
+plan. There is no model call per action. Each survivor has seeded random intelligence
+(0–100 scale): the initial group includes one at 85–100 and another at 5–20.
+Intelligence controls both planning limits: smarter survivors wait closer to
+**50 ticks and 20 seconds**, less intelligent survivors closer to **75 ticks and
+40 seconds**. Tick delays receive ±2 ticks of jitter, clamped to 50–75; both
+limits must expire, measured from processing the previous result (including failures).
+Initial eligibility is staggered in separate 5–10 tick slots; new arrivals also
+wait before their first request. Eligibility is permission to replan, not a forced
+call. There is at most one gameplay request in flight, admitted fairly across
+survivors. Invalid gameplay responses use local fallback until the next planning
+window rather than immediately retrying. Emergency actions never wait for inference.
+Intelligence affects access frequency, not model size or a guarantee of better
+reasoning; it appears in the sidebar, model context, traces, and survivor reports.
 
 Gameplay, retries, and postmortems share a gate that leaves **three seconds idle
 after each inference call**. Increase it for a quieter machine:

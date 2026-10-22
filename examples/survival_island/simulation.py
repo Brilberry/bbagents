@@ -98,6 +98,7 @@ class Survivor:
     death_tick: int | None = None
     death_cause: str | None = None
     decision_source: str = "rule"
+    intelligence: int = 50
 
 
 class Island:
@@ -181,6 +182,7 @@ class Simulation:
         self.weather_random = random.Random(seed + 91)
         self.last_lightning: tuple[Position, int] | None = None
         self.random = random.Random(seed + 1)
+        self.intelligence_random = random.Random(seed + 211)
         self.tick = 0
         self.day_length = 80
         self.messages: deque[Message] = deque(maxlen=100)
@@ -209,6 +211,9 @@ class Simulation:
                     name=names[index % len(names)],
                     position=position,
                     objective=objectives[index % len(objectives)],
+                    intelligence=self.intelligence_random.randint(
+                        85 if index == 0 else 5 if index == 1 else 20,
+                        100 if index == 0 else 20 if index == 1 else 85),
                 )
             )
         self.policy = SurvivalPolicy(self)
@@ -314,6 +319,7 @@ class Simulation:
             model_plan = getattr(self.policy, "model_plans", {}).get(agent.id)
             active_plan = model_plan if agent.decision_source == "model plan" else agent.current_plan
             self.trace.record("survivor.state", {"agent": agent.id, "name": agent.name,
+                "intelligence": agent.intelligence,
                 "health": agent.health, "hunger": agent.hunger, "thirst": agent.thirst,
                 "energy": agent.energy, "position": agent.position, "inventory": dict(agent.inventory),
                 "home": agent.home, "sleep_remaining": agent.sleep_remaining,
@@ -441,7 +447,8 @@ class Simulation:
         name = names[(number - 6) % len(names)]
         if number > 12:
             name += str(number)
-        agent = Survivor(f"agent-{number}", name, self.random.choice(positions), "Build a safe shelter")
+        agent = Survivor(f"agent-{number}", name, self.random.choice(positions), "Build a safe shelter",
+                         intelligence=self.intelligence_random.randint(5, 100))
         self.agents.append(agent)
         self.tools[agent.id] = self._make_tools(agent)
         self.observe(agent)

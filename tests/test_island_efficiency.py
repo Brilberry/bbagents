@@ -17,7 +17,7 @@ def test_one_model_plan_drives_many_tool_actions():
         calls.append(args)
         return {"goal": "Prepare a weapon", "milestones": ["gather_wood", "craft_spear"]}
 
-    policy = ModelPolicy(simulation, model="fake", cooldown=0, clock=lambda: 0, requester=requester)
+    policy = ModelPolicy(simulation, initial_stagger=False, tick_range=(0, 0), model="fake", cooldown=0, clock=lambda: 0, requester=requester)
     simulation.policy = policy
     try:
         policy.decide(agent)
@@ -58,7 +58,7 @@ def test_material_change_replans_but_not_every_tick():
     simulation = Simulation(agents=1, predator_interval=None, lightning_probability=0)
     agent = simulation.agents[0]
     now = [0.0]
-    policy = ModelPolicy(simulation, model="fake", cooldown=0, clock=lambda: now[0], requester=lambda *args: {
+    policy = ModelPolicy(simulation, initial_stagger=False, tick_range=(0, 0), model="fake", cooldown=0, clock=lambda: now[0], requester=lambda *args: {
         "goal": "Explore", "milestones": ["explore"]})
     simulation.policy = policy
     try:
@@ -71,7 +71,7 @@ def test_material_change_replans_but_not_every_tick():
         assert agent.id in policy.reasons
         assert not policy.pending
         assert policy.model_plans[agent.id] is plan
-        now[0] = 21
+        now[0] = 41
         policy.decide(agent)
         assert agent.id in policy.pending
         policy.pending[agent.id][1].result(timeout=2)
@@ -84,7 +84,7 @@ def test_material_change_replans_but_not_every_tick():
 def test_strategy_cache_is_bounded_and_inventory_sensitive():
     simulation = Simulation(agents=1, predator_interval=None, lightning_probability=0)
     agent = simulation.agents[0]
-    policy = ModelPolicy(simulation, model="fake", cooldown=0, requester=lambda *args: None)
+    policy = ModelPolicy(simulation, initial_stagger=False, tick_range=(0, 0), model="fake", cooldown=0, requester=lambda *args: None)
     try:
         key = policy._cache_key(policy._snapshot(agent))
         policy.plan_cache.put(key, {"goal": "Recover", "milestones": ["rest"]})
@@ -138,7 +138,7 @@ def test_late_postmortem_uses_disk_history_after_memory_eviction(tmp_path):
 def test_survival_emergency_pauses_instead_of_losing_model_plan():
     simulation = Simulation(agents=1, predator_interval=None, lightning_probability=0)
     agent = simulation.agents[0]
-    policy = ModelPolicy(simulation, model="fake", cooldown=0, requester=lambda *args: {
+    policy = ModelPolicy(simulation, initial_stagger=False, tick_range=(0, 0), model="fake", cooldown=0, requester=lambda *args: {
         "goal": "Explore", "milestones": ["explore"]})
     simulation.policy = policy
     try:
@@ -168,7 +168,7 @@ def test_only_one_gameplay_request_can_be_outstanding():
         assert release.wait(timeout=3)
         return {"goal": "Explore", "milestones": ["explore"]}
 
-    policy = ModelPolicy(simulation, model="fake", cooldown=0, requester=requester)
+    policy = ModelPolicy(simulation, initial_stagger=False, tick_range=(0, 0), model="fake", cooldown=0, requester=requester)
     try:
         for agent in simulation.agents:
             policy.decide(agent)
@@ -198,7 +198,7 @@ def test_postmortems_share_gameplay_inference_gate(tmp_path):
 
     gate = InferenceGate(3, clock=lambda: now[0], sleeper=sleep)
     simulation = Simulation(agents=1, predator_interval=None, lightning_probability=0)
-    policy = ModelPolicy(simulation, model="fake", gate=gate, clock=lambda: now[0], requester=gameplay)
+    policy = ModelPolicy(simulation, initial_stagger=False, tick_range=(0, 0), model="fake", gate=gate, clock=lambda: now[0], requester=gameplay)
     simulation.policy = policy
     manager = ReportManager(simulation, directory=tmp_path, model="fake", requester=summary)
     try:

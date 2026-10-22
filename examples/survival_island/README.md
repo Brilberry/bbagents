@@ -50,12 +50,19 @@ The model returns a goal and 1–6 milestones such as `gather_wood`, `build_shel
 and `rest`. These become a framework `Plan` with dependent `PlanStep` objects.
 Local controllers execute movements, repeated gathering, crafting, and other tools
 until each milestone completes, keeping evidence of progress. `DecisionRuntime`
-validates the milestone schema and retries failures once. Every actual tool call
+validates the milestone schema and traces failed attempts. Every actual tool call
 still passes live availability and world checks. The UI shows plans, cache hits,
 and failures; traces distinguish model plans from reference-policy actions.
 
-Only plan completion or significant changes request replanning, with a 20-second
-per-survivor planning cooldown. A shared inference gate enforces a three-second
+Only plan completion or significant changes request replanning. Seeded intelligence
+(0–100) sets each survivor's minimum waits: 50–75 ticks (±2 jitter, clamped to that
+range) and 20–40 seconds, with smarter survivors eligible more often. Both limits
+must expire after the previous result, including failed requests. The starting
+group includes a smart survivor (85–100) and a less intelligent one (5–20).
+Initial eligibility is staggered by 5–10 ticks per survivor, including new arrivals.
+Gameplay failures wait for the next window instead of immediately retrying.
+Intelligence is displayed in the sidebar and saved reports; local emergency
+actions remain immediate. A shared inference gate enforces a three-second
 idle gap after each call, including retries and postmortems. Increase that gap
 using `--inference-cooldown 6`. Routine requests use 8,192 context tokens and an
 8,000-character snapshot budget. A bounded framework `Cache` reuses matching

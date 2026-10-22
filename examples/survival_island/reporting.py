@@ -71,6 +71,7 @@ def _write_reports(simulation, directory: Path) -> None:
         analysis_note = ("If model analysis was enabled, its postmortem will appear here once generated."
                          if not agent.alive else "No death analysis: this survivor is alive at this save.")
         lines = [f"# {agent.name} ({agent.id})", "", status, "",
+                 f"Intelligence: {agent.intelligence}/100.", "",
                  f"Final needs: HP {agent.health:.1f}, hunger {agent.hunger:.1f}, "
                  f"thirst {agent.thirst:.1f}, energy {agent.energy:.1f}.",
                  f"Damage recorded in ticks {max(0, end - 199)}–{end}: {damage:.1f}.", "",

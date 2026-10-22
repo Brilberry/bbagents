@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import replace
 import json
 import logging
+import random
 import time
 import urllib.error
 import urllib.request
@@ -101,10 +102,12 @@ class ModelPolicy(SurvivalPolicy):
 
     def __init__(self, simulation, *, model, endpoint="http://localhost:11434/api/chat",
                  interval=20.0, cooldown=3.0, requester=request_decision,
-                 clock=time.monotonic, gate=None):
+                 clock=time.monotonic, gate=None, tick_range=(50, 75), initial_stagger=True):
         super().__init__(simulation)
         if interval < 0:
             raise ValueError("planning interval cannot be negative")
+        if len(tick_range) != 2 or not 0 <= tick_range[0] <= tick_range[1]:
+            raise ValueError("tick_range must be nonnegative and ordered")
         self.model, self.endpoint, self.requester = model, endpoint, requester
         self.interval, self.clock = interval, clock
         self.gate = gate or InferenceGate(cooldown, clock=clock)
@@ -114,6 +117,12 @@ class ModelPolicy(SurvivalPolicy):
             trace=simulation.trace, model_id=model)
         self.pending = {}
         self.next_request = {}
+        self.next_request_tick = {}
+        self.tick_range, self.initial_stagger = tick_range, initial_stagger
+        self.schedule_random = random.Random(317)
+        self.last_initial_tick = simulation.tick
+        for agent in simulation.agents:
+            self._register(agent)
         self.model_plans = {}
         self.status = {}
         self.accepted = self.failed = self.cache_hits = 0
@@ -123,6 +132,29 @@ class ModelPolicy(SurvivalPolicy):
         self.last_calls = {}
         self.plan_cache = Cache()
         self.cache_size = 0
+
+    def _register(self, agent):
+        if agent.id in self.next_request_tick:
+            return
+        # Separate initial slots, including survivors arriving later in the run.
+        if self.initial_stagger:
+            self.last_initial_tick = max(self.sim.tick, self.last_initial_tick) + self.schedule_random.randint(5, 10)
+            self.next_request_tick[agent.id] = self.last_initial_tick
+        else:
+            self.next_request_tick[agent.id] = self.sim.tick
+
+    def _defer(self, agent):
+        intelligence = max(0, min(100, agent.intelligence)) / 100
+        low, high = self.tick_range
+        delay = round(high - (high - low) * intelligence) + self.schedule_random.randint(-2, 2)
+        delay = max(low, min(high, delay))
+        seconds = self.interval * (2 - intelligence)
+        self.next_request_tick[agent.id] = self.sim.tick + delay
+        self.next_request[agent.id] = self.clock() + seconds
+        self.sim.trace.record("model.eligibility_scheduled", {
+            "agent": agent.id, "intelligence": agent.intelligence,
+            "next_tick": self.next_request_tick[agent.id], "tick_delay": delay,
+            "wall_cooldown_seconds": seconds})
 
     def _signature(self, agent):
         return (agent.home, bool(self.nearest_known_terrain(agent, Terrain.RIVER)),
@@ -154,7 +186,7 @@ class ModelPolicy(SurvivalPolicy):
                 continue
             self.pending.pop(agent_id)
             agent = next(item for item in self.sim.agents if item.id == agent_id)
-            self.next_request[agent_id] = self.clock() + self.interval
+            self._defer(agent)
             if not agent.alive:
                 continue
             try:
@@ -182,9 +214,11 @@ class ModelPolicy(SurvivalPolicy):
                 or any(step.status == StepStatus.FAILED for step in plan.steps))
 
     def _eligible(self, agent):
+        self._register(agent)
         return (agent.alive and not agent.sleep_remaining and not agent.suspended_plan_key
                 and not self.sim.visible_predators(agent) and not self._emergency(agent)
                 and self.clock() >= self.next_request.get(agent.id, 0)
+                and self.sim.tick >= self.next_request_tick[agent.id]
                 and self._needs_request(agent))
 
     def _snapshot(self, agent):
@@ -193,6 +227,7 @@ class ModelPolicy(SurvivalPolicy):
             return sorted(positions, key=lambda pos: self.sim.distance(agent.position, pos))[:6]
         return {
             "id": agent.id, "objective": agent.objective, "tick": self.sim.tick,
+            "intelligence": agent.intelligence,
             "health": round(agent.health), "hunger": round(agent.hunger),
             "thirst": round(agent.thirst), "energy": round(agent.energy), "home": agent.home,
             "position": agent.position, "inventory": dict(agent.inventory),
@@ -230,13 +265,13 @@ class ModelPolicy(SurvivalPolicy):
         if cached is not None:
             self._install(agent, deepcopy(cached), cached=True)
             self.cache_hits += 1
-            self.next_request[agent.id] = self.clock() + self.interval
+            self._defer(agent)
             return
         context = ContextBuilder(ContextBudget(max_items=1, max_characters=8000)).build([
             ContextItem(json.dumps(snapshot), source=agent.id, priority=100)])
         if not context.items:
             self.status[agent.id] = "fallback: context budget exceeded"
-            self.next_request[agent.id] = self.clock() + self.interval
+            self._defer(agent)
             return
         request = DecisionRequest(task="Plan island survival milestones", system=SYSTEM, context=context,
                                   schema=IslandDecisionSchema(),
@@ -359,7 +394,7 @@ class ModelPolicy(SurvivalPolicy):
                     self._invalidate(agent, f"known {resource} depleted")
 
     def _request(self, request):
-        return self.runtime.decide(request, retries=1).value
+        return self.runtime.decide(request, retries=0).value
 
     def close(self):
         self.pool.shutdown(wait=False, cancel_futures=True)

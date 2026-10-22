@@ -137,7 +137,7 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
                 screen.blit(small.render(needs, True, (210, 210, 210)), (left, y))
                 y += 16
                 inventory = ", ".join(f"{name}:{amount}" for name, amount in agent.inventory.items() if amount) or "empty"
-                screen.blit(small.render(f"inventory: {inventory}", True, (180, 185, 190)), (left, y))
+                screen.blit(small.render(f"INT {agent.intelligence} · inventory: {inventory}", True, (180, 185, 190)), (left, y))
                 y += 16
                 plan = (agent.current_plan if agent.suspended_plan_key else
                         getattr(sim.policy, "model_plans", {}).get(agent.id, agent.current_plan))

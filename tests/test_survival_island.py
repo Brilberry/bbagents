@@ -60,7 +60,7 @@ def test_model_proposal_is_executed_through_tools() -> None:
     from examples.survival_island.model_policy import ModelPolicy
     simulation = Simulation(agents=1)
     agent = simulation.agents[0]
-    policy = ModelPolicy(simulation, model="fake", cooldown=0, requester=lambda *args: {
+    policy = ModelPolicy(simulation, initial_stagger=False, tick_range=(0, 0), model="fake", cooldown=0, requester=lambda *args: {
         "goal": "Survey terrain", "milestones": ["explore"]})
     try:
         policy.decide(agent)
@@ -490,24 +490,27 @@ def test_model_cannot_call_unknown_tool_or_supply_extra_arguments() -> None:
                                "tool": tool, "arguments": arguments})
 
 
-def test_framework_retries_invalid_model_response_and_traces_attempts() -> None:
+def test_invalid_model_response_waits_for_next_planning_window() -> None:
+    import pytest
+    from bbagents.decision import DecisionFailure
     from examples.survival_island.model_policy import ModelPolicy
     simulation = Simulation(agents=1)
     calls = []
     def requester(*args):
         calls.append(args)
         return {"goal": "Survey", "milestones": ["bad" if len(calls) == 1 else "explore"]}
-    policy = ModelPolicy(simulation, model="fake", cooldown=0, requester=requester)
+    policy = ModelPolicy(simulation, initial_stagger=False, tick_range=(0, 0), model="fake", cooldown=0, requester=requester)
     try:
         agent = simulation.agents[0]
         policy.decide(agent)
-        policy.pending[agent.id][1].result(timeout=2)
+        with pytest.raises(DecisionFailure):
+            policy.pending[agent.id][1].result(timeout=2)
         simulation.tick = 100
         assert policy.decide(agent).tool_name == "move"
-        assert policy.accepted == 1
-        assert len(calls) == 2
+        assert policy.accepted == 0
+        assert len(calls) == 1
+        assert not policy.pending
         assert simulation.trace.events_named("decision.failed")
-        assert simulation.trace.events_named("decision.completed")
     finally:
         policy.close()
 
@@ -518,7 +521,7 @@ def test_model_failure_exposes_reason_in_status() -> None:
     def requester(*args):
         raise RuntimeError("Ollama HTTP 404: model missing")
     simulation = Simulation(agents=1)
-    policy = ModelPolicy(simulation, model="missing", cooldown=0, requester=requester)
+    policy = ModelPolicy(simulation, initial_stagger=False, tick_range=(0, 0), model="missing", cooldown=0, requester=requester)
     try:
         agent = simulation.agents[0]
         policy.decide(agent)
@@ -564,7 +567,7 @@ def test_unavailable_model_action_fails_framework_validation_and_is_fed_back():
     def requester(endpoint, model, snapshot):
         snapshots.append(snapshot)
         return {"goal": "Gather", "tool": "gather", "arguments": {"resource": "wood"}}
-    policy = ModelPolicy(simulation, model="fake", cooldown=0, requester=requester, clock=lambda: now[0])
+    policy = ModelPolicy(simulation, initial_stagger=False, tick_range=(0, 0), model="fake", cooldown=0, requester=requester, clock=lambda: now[0])
     try:
         policy.decide(agent)
         with pytest.raises(DecisionFailure):
@@ -575,7 +578,7 @@ def test_unavailable_model_action_fails_framework_validation_and_is_fed_back():
         assert simulation.trace.events_named("decision.failed")
         for _ in range(12):
             agent.feedback.append(Observation("world", "Observed idle terrain"))
-        now[0] += policy.interval + 1
+        now[0] += policy.interval * 2 + 1
         policy.decide(agent)
         with pytest.raises(DecisionFailure):
             policy.pending[agent.id][1].result(timeout=2)
@@ -590,7 +593,7 @@ def test_model_action_rechecked_if_another_agent_depletes_resource():
     agent = simulation.agents[0]
     tile = simulation.world.tile(agent.position)
     tile.resources["wood"] = 1
-    policy = ModelPolicy(simulation, model="fake", cooldown=0, requester=lambda *args: {
+    policy = ModelPolicy(simulation, initial_stagger=False, tick_range=(0, 0), model="fake", cooldown=0, requester=lambda *args: {
         "goal": "Gather", "milestones": ["gather_wood"]})
     try:
         policy.decide(agent)
