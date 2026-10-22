@@ -58,6 +58,7 @@ class Predator:
     position: Position
     health: float
     pack_id: str | None = None
+    next_attack_tick: int = 0
 
     @property
     def alive(self) -> bool:
@@ -570,7 +571,10 @@ class Simulation:
                       min(living, key=lambda agent: self.distance(predator.position, agent.position)))
             distance = self.distance(predator.position, target.position)
             if distance <= 1:
-                damage = 30 if predator.kind == "bear" else 3
+                if self.tick < predator.next_attack_tick:
+                    continue
+                damage = 30 if predator.kind == "bear" else 7
+                predator.next_attack_tick = self.tick + (6 if predator.kind == "bear" else 4)
                 if self.world.tile(target.position).shelter_owner:
                     damage *= 0.25
                 target.health = max(0, target.health - damage)

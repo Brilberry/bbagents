@@ -105,11 +105,12 @@ reduces sustained work rather than guaranteeing silent operation.
 The first wolf pack arrives at tick 250, with another arrival every 250 ticks:
 a pack of **2–3 randomly chosen wolves**, another wolf pack, then one lone bear,
 repeating. Defeated animals stay defeated; arrivals do not replace losses.
-Wolves act every four ticks; bears act every two ticks. Agents only
+Wolves move/attack every four ticks; bears move every two ticks but can attack
+only once every six ticks. Agents only
 observe predators within their visibility range.
 
 Wolves travel together and share a target when any pack member detects a survivor.
-Each wolf deals only **3 damage** per attack (9 if all three land a hit). Bears
+Each wolf has **45 health** and deals **7 damage** per attack (21 if all three land a hit). Bears
 hunt independently and deal **30 damage** per attack, with **150 health**.
 When members of different wolf packs meet on the same or adjacent tiles, both
 packs merge, including distant packmates, and share a target. Merges can create

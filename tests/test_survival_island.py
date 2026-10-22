@@ -251,10 +251,10 @@ def test_flee_rest_and_shelter_defense():
         other.alive = False
     simulation.tick = 4
     simulation._update_predators()
-    assert agent.health == 99.25  # shelter reduces the wolf's 3 damage to 0.75
+    assert agent.health == 98.25  # shelter reduces the wolf's 7 damage to 1.75
     wolf.health = 0
     simulation.rest(agent)
-    assert agent.health > 99.25
+    assert agent.health > 98.25
 
 
 def test_wolf_pack_shares_target_while_bear_hunts_independently():
@@ -278,7 +278,7 @@ def test_wolf_pack_shares_target_while_bear_hunts_independently():
     ]
     simulation.tick = 4
     simulation._update_predators()
-    assert first.health == 97
+    assert first.health == 93
     assert second.health == 70  # only the independent bear attacks this survivor
     assert simulation.predators[1].position == (12, 10)  # joins pack's prey, despite nearby second agent
 
@@ -294,10 +294,45 @@ def test_three_adjacent_wolves_deal_less_combined_damage_than_one_bear():
     simulation.predators = [Predator(f"w{i}", "wolf", agent.position, 45, "pack") for i in range(3)]
     simulation.tick = 4
     simulation._update_predators()
-    assert agent.health == 91
+    assert agent.health == 79
     simulation.predators = [Predator("bear", "bear", agent.position, 75)]
     simulation._update_predators()
-    assert agent.health == 61
+    assert agent.health == 49
+
+
+def test_bear_attack_cooldown_persists_when_target_changes():
+    from examples.survival_island.simulation import Predator
+
+    simulation = Simulation(agents=2, predator_interval=None, lightning_probability=0)
+    first, second = simulation.agents
+    first.position = second.position = (10, 10)
+    simulation.world.tile(first.position).shelter_owner = None
+    bear = Predator("bear", "bear", first.position, 150)
+    simulation.predators = [bear]
+    simulation.tick = 2
+    simulation._update_predators()
+    assert first.health == 70
+    first.position = (25, 25)
+    for tick in (2, 3, 4, 5, 6, 7):
+        simulation.tick = tick
+        simulation._update_predators()
+        assert second.health == 100
+    simulation.tick = 8
+    simulation._update_predators()
+    assert second.health == 70
+
+
+def test_wolf_attacks_every_four_ticks_with_increased_damage():
+    from examples.survival_island.simulation import Predator
+
+    simulation = Simulation(agents=1, predator_interval=None, lightning_probability=0)
+    agent = simulation.agents[0]
+    simulation.world.tile(agent.position).shelter_owner = None
+    simulation.predators = [Predator("wolf", "wolf", agent.position, 45)]
+    for tick in range(1, 9):
+        simulation.tick = tick
+        simulation._update_predators()
+        assert agent.health == 100 - 7 * (tick // 4)
 
 
 def test_observation_never_restores_energy():
