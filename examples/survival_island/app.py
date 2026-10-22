@@ -76,6 +76,14 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
                 elif tile.resources[Resource.STONE.value] > 0:
                     pygame.draw.circle(screen, (210, 210, 205), rect.center, 3)
 
+        for predator in sim.predators:
+            if predator.alive:
+                px, py = predator.position
+                rect = pygame.Rect(px * tile_size + 3, py * tile_size + 3, tile_size - 6, tile_size - 6)
+                pygame.draw.rect(screen, (205, 50, 45) if predator.kind == "wolf" else (100, 49, 27), rect)
+                label = small.render("W" if predator.kind == "wolf" else "B", True, (255, 255, 255))
+                screen.blit(label, label.get_rect(center=rect.center))
+
         for index, agent in enumerate(sim.agents):
             x, y = agent.position
             center = (x * tile_size + tile_size // 2, y * tile_size + tile_size // 2)
@@ -84,9 +92,11 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
             screen.blit(label, label.get_rect(center=center))
 
         left = sim.world.size * tile_size + 14
-        status = f"Tick {sim.tick}  {'NIGHT' if sim.is_night else 'DAY'}  {'PAUSED' if paused else f'{ticks_per_second} t/s'}"
+        living_predators = sum(predator.alive for predator in sim.predators)
+        status = f"Day {sim.tick // sim.day_length + 1} · {'Night' if sim.is_night else 'Daylight'} · Tick {sim.tick}"
         screen.blit(font.render(status, True, (235, 235, 235)), (left, 10))
-        screen.blit(small.render("SPACE pause · → step · +/- speed", True, (150, 155, 160)), (left, 31))
+        speed = "Paused" if paused else f"Speed {ticks_per_second} ticks/s"
+        screen.blit(small.render(f"{speed} · Predators {living_predators} · SPACE pause · +/-", True, (150, 155, 160)), (left, 31))
         if model:
             summary = f"LLM {sim.policy.accepted} accepted / {sim.policy.failed} failed"
             screen.blit(small.render(summary, True, (190, 210, 230)), (left, 45))

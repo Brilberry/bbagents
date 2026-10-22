@@ -68,4 +68,12 @@ The most recent failure is retained separately from the recent-observation buffe
 
 The baseline replenishes
 forest berries each day. This makes sustained survival possible. Weather,
-disease, predators, and voice are not implemented yet.
+disease and voice are not implemented yet.
+
+Predators arrive starting at tick 250, one more every 250 ticks: two wolves,
+then a bear, repeating. They act every four ticks and are visible to agents only
+at close range. Survivors can craft a spear from three wood, attack adjacent
+predators, flee two tiles, or rest to recover when safe. Shelters reduce attacks
+by 75%. Immediate rule-based defense overrides model latency. Wolves and bears
+are marked W and B on the map; combat appears in events and traces.
+Use `Simulation(predator_interval=None)` for a predator-free baseline.

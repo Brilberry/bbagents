@@ -19,6 +19,12 @@ Tools: observe_surroundings(), move(direction: north/south/east/west),
 gather(resource: wood/berries/stone), craft(item: axe/ration),
 build(structure: shelter), eat(item: berries/ration), drink(),
 communicate(agent_id, message). No other tools or arguments are allowed.
+Also: flee(), attack(predator_id), rest(), craft(item: spear).
+Predators arrive every 250 ticks starting at tick 250. Visible predators are
+listed with IDs and positions. Flee sprints two tiles for 3 energy; attack costs
+2 energy and requires an adjacent predator. A spear costs 3 wood and deals
+25 damage; an axe deals 12, bare hands 5. Shelters reduce predator damage by 75%.
+Rest when no predator is visible to restore energy and recover health if fed/hydrated.
 Hunger/thirst increase toward 100; energy decreases toward 0. Stay alive first.
 Shelter costs 10 wood on empty grass; axe costs 3 wood + 1 stone;
 ration costs 2 berries. Gathering requires being at the resource.
@@ -37,10 +43,11 @@ def output_format() -> dict:
     """Discriminated action schema: every tool has exactly its own arguments."""
     variants = []
     specifications = {
-        "observe_surroundings": {}, "drink": {},
+        "observe_surroundings": {}, "drink": {}, "flee": {}, "rest": {},
+        "attack": {"predator_id": None},
         "move": {"direction": ["north", "south", "east", "west"]},
         "gather": {"resource": ["wood", "berries", "stone"]},
-        "craft": {"item": ["axe", "ration"]},
+        "craft": {"item": ["axe", "ration", "spear"]},
         "build": {"structure": ["shelter"]},
         "eat": {"item": ["berries", "ration"]},
         "communicate": {"agent_id": None, "message": None},
@@ -92,7 +99,8 @@ def validate_decision(value: dict) -> ToolCall:
     arguments_by_tool = {
         "observe_surroundings": {}, "move": {"direction": {"north", "south", "east", "west"}},
         "gather": {"resource": {"wood", "berries", "stone"}},
-        "craft": {"item": {"axe", "ration"}}, "build": {"structure": {"shelter"}},
+        "craft": {"item": {"axe", "ration", "spear"}}, "build": {"structure": {"shelter"}},
+        "flee": {}, "rest": {}, "attack": {"predator_id": None},
         "eat": {"item": {"berries", "ration"}}, "drink": {},
         "communicate": {"agent_id": None, "message": None},
     }
@@ -162,6 +170,9 @@ class ModelPolicy(SurvivalPolicy):
         self.status: dict[str, str] = {}
 
     def decide(self, agent: Survivor) -> ToolCall:
+        # Immediate threats use deterministic defense instead of waiting for inference.
+        if self.sim.visible_predators(agent):
+            return self.defend(agent)
         pending = self.pending.get(agent.id)
         if pending is not None and pending[1].done():
             _, future = self.pending.pop(agent.id)
@@ -204,6 +215,9 @@ class ModelPolicy(SurvivalPolicy):
                 "id": agent.id, "objective": agent.objective, "tick": self.sim.tick,
                 "night": self.sim.is_night, "position": agent.position,
                 "health": agent.health, "hunger": agent.hunger,
+                "predators": [{"id": predator.id, "kind": predator.kind,
+                               "position": predator.position, "health": predator.health}
+                              for predator in self.sim.visible_predators(agent)],
                 "thirst": agent.thirst, "energy": agent.energy,
                 "inventory": dict(agent.inventory), "last_result": agent.last_action,
                 "current_tile": {"terrain": tile.terrain.value,

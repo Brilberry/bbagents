@@ -49,6 +49,18 @@ class Message:
 
 
 @dataclass(slots=True)
+class Predator:
+    id: str
+    kind: str
+    position: Position
+    health: float
+
+    @property
+    def alive(self) -> bool:
+        return self.health > 0
+
+
+@dataclass(slots=True)
 class Survivor:
     id: str
     name: str
@@ -134,8 +146,13 @@ class Simulation:
         "north": (0, -1), "south": (0, 1), "west": (-1, 0), "east": (1, 0)
     }
 
-    def __init__(self, *, size: int = 30, agents: int = 5, seed: int = 7) -> None:
+    def __init__(self, *, size: int = 30, agents: int = 5, seed: int = 7,
+                 predator_interval: int | None = 250) -> None:
+        if predator_interval is not None and predator_interval < 1:
+            raise ValueError("predator_interval must be positive or None")
         self.world = Island(size, seed)
+        self.predator_interval = predator_interval
+        self.predators: list[Predator] = []
         self.random = random.Random(seed + 1)
         self.tick = 0
         self.day_length = 80
@@ -192,11 +209,16 @@ class Simulation:
             FunctionTool("build", "Build a structure on the current tile", lambda structure: self.build(agent, structure)),
             FunctionTool("eat", "Eat an inventory item", lambda item: self.eat(agent, item)),
             FunctionTool("drink", "Drink when on or next to a river", lambda: self.drink(agent)),
+            FunctionTool("flee", "Sprint two tiles away from a visible predator", lambda: self.flee(agent)),
+            FunctionTool("attack", "Attack an adjacent predator", lambda predator_id: self.attack(agent, predator_id)),
+            FunctionTool("rest", "Rest and recover health when safe", lambda: self.rest(agent)),
             FunctionTool("communicate", "Send a message to another agent", lambda agent_id, message: self.communicate(agent, agent_id, message)),
         ])
 
     def step(self) -> None:
         self.tick += 1
+        if self.predator_interval and self.tick % self.predator_interval == 0:
+            self._spawn_predator()
         if self.tick % self.day_length == 0:
             for row in self.world.tiles:
                 for tile in row:
@@ -235,6 +257,100 @@ class Simulation:
                 agent.last_action = f"failed: {exc}"
                 self.trace.record("tool.finished", {"tick": self.tick, "agent": agent.id, "tool_name": call.tool_name, "status": "failed", "error": str(exc)})
                 self.policy.replan(agent, f"tool failure: {exc}")
+        self._update_predators()
+
+    def visible_predators(self, agent: Survivor) -> list[Predator]:
+        return [predator for predator in self.predators if predator.alive
+                and self.distance(agent.position, predator.position) <= agent.visibility]
+
+    def _spawn_predator(self) -> None:
+        edge = self.world.size - 1
+        positions = [(x, y) for x in range(self.world.size) for y in range(self.world.size)
+                     if (x in (0, edge) or y in (0, edge))
+                     and self.world.passable((x, y))
+                     and self.world.tile((x, y)).terrain != Terrain.RIVER]
+        if not positions:
+            return
+        living = [agent for agent in self.agents if agent.alive]
+        safe = [pos for pos in positions if all(self.distance(pos, agent.position) >= 6 for agent in living)]
+        kind = "bear" if (len(self.predators) + 1) % 3 == 0 else "wolf"
+        predator = Predator(f"predator-{len(self.predators) + 1}", kind,
+                            self.random.choice(safe or positions), 75 if kind == "bear" else 45)
+        self.predators.append(predator)
+        self.event_log.appendleft(f"Tick {self.tick}: a {kind} arrived")
+        self.trace.record("predator.spawned", {"tick": self.tick, "id": predator.id, "kind": kind})
+
+    def _update_predators(self) -> None:
+        # Predators act every four ticks; survivors have time to evade or fight.
+        if self.tick % 4:
+            return
+        for predator in self.predators:
+            if not predator.alive:
+                continue
+            living = [agent for agent in self.agents if agent.alive]
+            if not living:
+                return
+            target = min(living, key=lambda agent: self.distance(predator.position, agent.position))
+            distance = self.distance(predator.position, target.position)
+            if distance <= 1:
+                damage = 12 if predator.kind == "bear" else 8
+                if self.world.tile(target.position).shelter_owner:
+                    damage *= 0.25
+                target.health = max(0, target.health - damage)
+                target.alive = target.health > 0
+                result = Observation("predator.attack", f"{predator.kind} hit for {damage:g} damage",
+                                     {"predator_id": predator.id, "tick": self.tick})
+                target.feedback.append(result)
+                target.last_action = result.content if target.alive else "killed by predator"
+                self.event_log.appendleft(f"Tick {self.tick}: {predator.kind} attacked {target.name}")
+                self.trace.record("predator.attacked", {"tick": self.tick, "agent": target.id,
+                                                        "predator": predator.id, "damage": damage})
+                continue
+            neighbors = [(predator.position[0] + dx, predator.position[1] + dy)
+                         for dx, dy in self.DIRECTIONS.values()]
+            neighbors = [pos for pos in neighbors if self.world.passable(pos)
+                         and self.world.tile(pos).terrain != Terrain.RIVER]
+            if neighbors:
+                predator.position = (min(neighbors, key=lambda pos: self.distance(pos, target.position))
+                                     if distance <= 6 else self.random.choice(neighbors))
+
+    def flee(self, agent: Survivor) -> Observation:
+        threats = self.visible_predators(agent)
+        if not threats or agent.energy < 3:
+            raise ValueError("flee requires a visible predator and 3 energy")
+        for _ in range(2):
+            neighbors = [(agent.position[0] + dx, agent.position[1] + dy)
+                         for dx, dy in self.DIRECTIONS.values()]
+            neighbors = [pos for pos in neighbors if self.world.passable(pos)]
+            if not neighbors:
+                break
+            agent.position = max(neighbors, key=lambda pos: min(
+                self.distance(pos, predator.position) for predator in threats))
+        agent.energy -= 3
+        self.observe(agent)
+        return Observation("flee", f"fled to {agent.position}", {"position": agent.position})
+
+    def attack(self, agent: Survivor, predator_id: str) -> Observation:
+        predator = next((item for item in self.visible_predators(agent)
+                         if item.id == predator_id and self.distance(item.position, agent.position) <= 1), None)
+        if predator is None or agent.energy < 2:
+            raise ValueError("attack requires an adjacent live predator and 2 energy")
+        damage = 25 if agent.inventory["spear"] else 12 if agent.inventory["axe"] else 5
+        predator.health = max(0, predator.health - damage)
+        agent.energy -= 2
+        outcome = "defeated" if not predator.alive else f"hit for {damage}"
+        self.trace.record("predator.defended", {"agent": agent.id, "predator": predator.id,
+                                              "damage": damage, "defeated": not predator.alive})
+        self.event_log.appendleft(f"{agent.name} {outcome} {predator.kind}")
+        return Observation("attack", f"{outcome} {predator.kind}", {"predator_id": predator.id})
+
+    def rest(self, agent: Survivor) -> Observation:
+        if self.visible_predators(agent):
+            raise ValueError("cannot rest near a visible predator")
+        agent.energy = min(100, agent.energy + 3)
+        if agent.hunger < 68 and agent.thirst < 64:
+            agent.health = min(100, agent.health + 0.5)
+        return Observation("rest", "rested", {"energy": agent.energy, "health": agent.health})
 
     def _apply_needs(self, agent: Survivor) -> None:
         agent.hunger = min(100.0, agent.hunger + 0.55)
@@ -278,19 +394,29 @@ class Simulation:
                 for other in self.agents:
                     if other.id != agent.id and other.alive:
                         self.communicate(agent, other.id, f"river:{river[0]},{river[1]}")
-        return Observation("world", f"Observed {len(seen)} tiles and {len(nearby)} nearby agents", {"tiles": seen, "nearby_agents": nearby})
+        threats = [{"id": item.id, "kind": item.kind, "position": item.position,
+                    "health": item.health} for item in self.visible_predators(agent)]
+        return Observation("world", f"Observed {len(seen)} tiles and {len(nearby)} nearby agents", {"tiles": seen, "nearby_agents": nearby, "predators": threats})
 
     def available_actions(self, agent: Survivor) -> list[ToolCall]:
         """Concrete legal calls at this location; message text remains free-form."""
         tile = self.world.tile(agent.position)
         calls = [ToolCall("observe_surroundings")]
+        threats = self.visible_predators(agent)
+        if threats and agent.energy >= 3:
+            calls.append(ToolCall("flee"))
+        if not threats:
+            calls.append(ToolCall("rest"))
+        for predator in threats:
+            if agent.energy >= 2 and self.distance(agent.position, predator.position) <= 1:
+                calls.append(ToolCall("attack", {"predator_id": predator.id}))
         for direction, (dx, dy) in self.DIRECTIONS.items():
             if self.world.passable((agent.position[0] + dx, agent.position[1] + dy)):
                 calls.append(ToolCall("move", {"direction": direction}))
         for resource in Resource:
             if tile.resources[resource.value] > 0:
                 calls.append(ToolCall("gather", {"resource": resource.value}))
-        for item, recipe in {"axe": {"wood": 3, "stone": 1}, "ration": {"berries": 2}}.items():
+        for item, recipe in {"axe": {"wood": 3, "stone": 1}, "ration": {"berries": 2}, "spear": {"wood": 3}}.items():
             if all(agent.inventory[name] >= count for name, count in recipe.items()):
                 calls.append(ToolCall("craft", {"item": item}))
         if tile.terrain == Terrain.GRASS and tile.shelter_owner is None and agent.inventory["wood"] >= 10:
@@ -346,7 +472,7 @@ class Simulation:
         return Observation("gather", f"gathered {amount} {resource}", {"resource": resource, "amount": amount})
 
     def craft(self, agent: Survivor, item: str) -> Observation:
-        recipes = {"axe": {"wood": 3, "stone": 1}, "ration": {"berries": 2}}
+        recipes = {"axe": {"wood": 3, "stone": 1}, "ration": {"berries": 2}, "spear": {"wood": 3}}
         if item not in recipes:
             raise ValueError(f"unknown recipe: {item}")
         recipe = recipes[item]
@@ -408,6 +534,9 @@ class SurvivalPolicy:
 
     def decide(self, agent: Survivor) -> ToolCall:
         self._read_messages(agent)
+        defense = self.defend(agent)
+        if defense:
+            return defense
         emergency = self._emergency(agent)
         if emergency and agent.plan_reason != emergency:
             self.replan(agent, emergency)
@@ -435,6 +564,24 @@ class SurvivalPolicy:
                 continue
             self.sim.trace.record("decision.completed", {"tick": self.sim.tick, "agent": agent.id, "reason": agent.plan_reason, "step": step.id, "tool": call.tool_name})
             return call
+        return ToolCall("observe_surroundings")
+
+    def defend(self, agent: Survivor) -> ToolCall | None:
+        threats = self.sim.visible_predators(agent)
+        if not threats:
+            if agent.health < 80 and agent.hunger < 68 and agent.thirst < 64:
+                return ToolCall("rest")
+            if self.sim.tick >= 200 and not agent.inventory["spear"] and agent.inventory["wood"] >= 3:
+                return ToolCall("craft", {"item": "spear"})
+            return None
+        nearest = min(threats, key=lambda item: self.sim.distance(agent.position, item.position))
+        agent.plan_reason = "predator emergency"
+        if agent.inventory["spear"] and agent.energy >= 2 and self.sim.distance(agent.position, nearest.position) <= 1:
+            return ToolCall("attack", {"predator_id": nearest.id})
+        if agent.energy >= 3:
+            return ToolCall("flee")
+        if agent.energy >= 2 and self.sim.distance(agent.position, nearest.position) <= 1:
+            return ToolCall("attack", {"predator_id": nearest.id})
         return ToolCall("observe_surroundings")
 
     def replan(self, agent: Survivor, reason: str) -> None:

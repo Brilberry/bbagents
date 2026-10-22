@@ -70,8 +70,28 @@ shows model proposal counts and errors, with full errors in the terminal.
 
 **Current limitation:** the LLM proposes one action per response. Its longer plan
 is displayed and reconsidered on later responses, but is not automatically
-executed as a sequence. Voice, weather, seasons, disease, and predators are future
+executed as a sequence. Voice, weather, seasons, and disease are future
 additions.
+
+### Predators and defense
+
+The first predator arrives at tick 250, with one additional predator every 250
+ticks afterward: two wolves, then a bear, repeating. Defeated animals stay
+defeated; the schedule adds one new animal rather than replacing losses.
+Predators roam, pursue nearby survivors, and act every four ticks. Agents only
+observe predators within their visibility range.
+
+Survivors can `craft("spear")` using three wood, `attack(predator_id)` when
+adjacent, `flee()` two tiles at an energy cost, or `rest()` when no predator is
+visible. A spear deals 25 damage, an axe 12, and bare hands 5. Shelters reduce
+incoming damage by 75%. Rest restores energy and slowly heals fed, hydrated agents.
+The rule policy prepares spears when it has wood from tick 200, attacks adjacent
+threats with a spear, and otherwise tries to flee. Immediate defense also overrides
+pending model requests so inference latency does not prevent a response. Model
+actions use the same tools, availability checks, observations, and traces.
+
+Use `Simulation(predator_interval=None)` to disable predators for baseline
+experiments, or set a different positive interval.
 
 ### Run locally
 

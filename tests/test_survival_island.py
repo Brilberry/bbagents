@@ -50,7 +50,7 @@ def test_agents_make_progress_over_long_run() -> None:
 
 
 def test_survivors_live_beyond_original_failure_window() -> None:
-    simulation = Simulation(seed=7)
+    simulation = Simulation(seed=7, predator_interval=None)
     for _ in range(1000):
         simulation.step()
     assert all(agent.alive and agent.health == 100 for agent in simulation.agents)
@@ -74,6 +74,63 @@ def test_model_proposal_is_executed_through_tools() -> None:
         assert policy.model_plans[agent.id].goal == "Survey terrain"
     finally:
         policy.close()
+
+
+def test_predators_arrive_on_schedule():
+    simulation = Simulation()
+    for _ in range(249):
+        simulation.step()
+    assert not simulation.predators
+    simulation.step()
+    assert len(simulation.predators) == 1
+    for _ in range(500):
+        simulation.step()
+    assert len(simulation.predators) == 3
+    assert [item.kind for item in simulation.predators] == ["wolf", "wolf", "bear"]
+
+
+def test_survivor_can_craft_spear_and_defeat_predator():
+    from examples.survival_island.simulation import Predator
+    from bbagents import ToolCall
+
+    simulation = Simulation()
+    agent = simulation.agents[0]
+    agent.inventory["wood"] = 3
+    simulation.tools[agent.id].execute(ToolCall("craft", {"item": "spear"}))
+    wolf = Predator("wolf-test", "wolf", agent.position, 45)
+    simulation.predators.append(wolf)
+    assert simulation.policy.decide(agent).tool_name == "attack"
+    simulation.tools[agent.id].execute(ToolCall("attack", {"predator_id": wolf.id}))
+    assert wolf.health == 20
+    simulation.tools[agent.id].execute(ToolCall("attack", {"predator_id": wolf.id}))
+    assert not wolf.alive
+    assert not simulation.visible_predators(agent)
+
+
+def test_flee_rest_and_shelter_defense():
+    import pytest
+    from examples.survival_island.simulation import Predator
+
+    simulation = Simulation()
+    agent = simulation.agents[0]
+    wolf = Predator("wolf-test", "wolf", agent.position, 45)
+    simulation.predators.append(wolf)
+    with pytest.raises(ValueError):
+        simulation.rest(agent)
+    before = simulation.distance(agent.position, wolf.position)
+    simulation.flee(agent)
+    assert simulation.distance(agent.position, wolf.position) > before
+    wolf.position = agent.position
+    simulation.world.tile(agent.position).shelter_owner = agent.id
+    # Remove other survivors so the attack target is unambiguous.
+    for other in simulation.agents[1:]:
+        other.alive = False
+    simulation.tick = 4
+    simulation._update_predators()
+    assert agent.health == 98  # shelter reduces the wolf's 8 damage to 2
+    wolf.health = 0
+    simulation.rest(agent)
+    assert agent.health > 98
 
 
 def test_model_cannot_call_unknown_tool_or_supply_extra_arguments() -> None:
