@@ -119,8 +119,8 @@ Every 1,000 ticks a new survivor arrives on a random land tile at the map edge.
 using a valid existing home. Scroll the sidebar or use Page Up / Page Down to
 inspect arrivals. `survivor_interval=None` disables this population growth.
 
-Lightning has a seeded 0.4% chance per tick. Half of strikes target an existing
-shelter when possible; others hit random tiles. Strikes destroy shelters, clear
+Lightning has a seeded 0.4% chance per tick. Every map tile is equally likely
+to be struck, with no bias toward shelters or terrain. Strikes destroy shelters, clear
 home assignments, and interrupt sleep, but cause no direct health damage.
 A yellow bolt marks the latest strike. Set `lightning_probability=0` to disable it.
 

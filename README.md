@@ -176,8 +176,8 @@ an actively owned home cannot be taken. Builders reuse their existing home rathe
 than building a new shelter after each interruption.
 
 **Lightning** has a 0.4% chance each tick (one strike per 250 ticks on average,
-not a fixed schedule). When shelters exist, half of strikes target a shelter;
-the rest hit a random tile. A struck shelter is destroyed, its home assignment
+not a fixed schedule). Every tile has the same chance of being targeted, regardless
+of shelters or terrain (1/900 per strike on a 30×30 map). A struck shelter is destroyed, its home assignment
 is cleared, and sleepers on that tile wake immediately. Lightning does not directly
 damage health. A yellow bolt briefly marks the strike, and observations and traces
 record the calamity. Its randomness is seeded for repeatable experiments.

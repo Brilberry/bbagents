@@ -529,12 +529,8 @@ class Simulation:
 
     def lightning_strike(self, position: Position | None = None) -> Observation:
         if position is None:
-            shelters = [(x, y) for y, row in enumerate(self.world.tiles)
-                        for x, tile in enumerate(row) if tile.shelter_owner is not None]
-            # Raised structures attract half the strikes when shelters exist.
-            position = (self.weather_random.choice(shelters)
-                        if shelters and self.weather_random.random() < 0.5 else
-                        (self.weather_random.randrange(self.world.size), self.weather_random.randrange(self.world.size)))
+            position = (self.weather_random.randrange(self.world.size),
+                        self.weather_random.randrange(self.world.size))
         if not self.world.in_bounds(position):
             raise ValueError("lightning target outside island")
         destroyed = self.world.tile(position).shelter_owner is not None
