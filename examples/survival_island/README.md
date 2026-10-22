@@ -97,6 +97,10 @@ at close range. Survivors can craft a spear from three wood, attack adjacent
 predators, flee two tiles, or rest to recover when safe. Shelters reduce attacks
 by 75%. Immediate rule-based defense overrides model latency. Wolves and bears
 are marked W and B on the map; combat appears in events and traces.
+Killing a wolf reduces the killer's hunger by 30 and thirst by 10; killing a bear
+reduces them by 50 and 20. This automatic food/hydration reward is applied only
+once, on the killing blow, and clamps needs at zero. Nonfatal attacks grant no
+reward. Tool feedback and `survivor.kill_reward` events record the actual recovery.
 Use `Simulation(predator_interval=None)` for a predator-free baseline.
 
 Predator hunger controls hunting range: below 40 is calm, then 2/6/10 tiles at

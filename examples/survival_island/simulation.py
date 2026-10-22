@@ -757,11 +757,23 @@ class Simulation:
         predator.provoked_until = self.tick + 12
         agent.energy -= 4
         agent.next_attack_tick = self.tick + 3
+        reward = {}
+        if not predator.alive:
+            food, hydration = (50, 20) if predator.kind == "bear" else (30, 10)
+            reward = {"hunger_recovered": min(agent.hunger, food),
+                      "thirst_recovered": min(agent.thirst, hydration)}
+            agent.hunger = max(0, agent.hunger - food)
+            agent.thirst = max(0, agent.thirst - hydration)
+            self.trace.record("survivor.kill_reward", {"agent": agent.id, "predator": predator.id,
+                "kind": predator.kind, **reward, "hunger": agent.hunger, "thirst": agent.thirst})
         outcome = "defeated" if not predator.alive else f"hit for {damage}"
         self.trace.record("predator.defended", {"agent": agent.id, "predator": predator.id,
                                               "damage": damage, "defeated": not predator.alive})
         self.event_log.appendleft(f"{agent.name} {outcome} {predator.kind}")
-        return Observation("attack", f"{outcome} {predator.kind}", {"predator_id": predator.id})
+        recovery = (f"; recovered {reward['hunger_recovered']:g} hunger and "
+                    f"{reward['thirst_recovered']:g} thirst" if reward else "")
+        return Observation("attack", f"{outcome} {predator.kind}{recovery}",
+                           {"predator_id": predator.id, **reward})
 
     def rest(self, agent: Survivor) -> Observation:
         if self.threatening_predators(agent):

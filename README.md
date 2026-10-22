@@ -148,6 +148,10 @@ Survivors can `craft("spear")` using three wood, `attack(predator_id)` when
 adjacent, `flee()` two tiles at an energy cost, or `rest()` when no predator is
 threatening. A spear deals 25 damage, an axe 12, and bare hands 5. Shelters reduce
 incoming damage by 75%. Rest restores energy and slowly heals fed, hydrated agents.
+Landing the killing blow automatically grants a one-time food/hydration reward:
+wolves reduce the killer's hunger by 30 and thirst by 10; bears by 50 and 20.
+Needs cannot fall below zero. Nonfatal hits grant nothing; rewards are recorded
+in tool feedback and `survivor.kill_reward` trace events.
 Attacks cost 4 energy and have a three-tick cooldown, so a survivor cannot strike
 repeatedly before a bear responds. The rule policy prefers fleeing when outnumbered,
 injured, or facing a bear without two nearby allies.

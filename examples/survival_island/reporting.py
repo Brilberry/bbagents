@@ -165,6 +165,8 @@ def summarize(agent_id, name, cause, death_tick, events, directory, *, model, en
                 "water at thirst >=55 (urgent at 85). A kill feeds them; a nonfatal attack does not. "
                 "Attacking a calm predator provokes it for 12 ticks. Wolves hit for 7 every 4 ticks; "
                 "bears hit for 30 every 6 ticks. Shelters reduce incoming damage by 75%. "
+                "Survivors killing a wolf automatically recover 30 hunger and 10 thirst; "
+                "killing a bear recovers 50 hunger and 20 thirst, only for the killer. "
                 "Return a concise summary, likely_contributors, uncertainties, and evidence_ticks."),
         context=context, schema=PostmortemSchema(),
         validate=lambda value: all(tick in included_ticks for tick in value["evidence_ticks"]),
