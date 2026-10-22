@@ -27,8 +27,12 @@ class Terrain(str, Enum):
     GRASS = "grass"
     FOREST = "forest"
     LAKE = "lake"
-    RIVER = "lake"  # Compatibility alias for callers of the original demo.
+    RIVER = "river"
     MOUNTAIN = "mountain"
+
+    @property
+    def is_water(self) -> bool:
+        return self in (Terrain.LAKE, Terrain.RIVER)
 
 
 class Resource(str, Enum):
@@ -113,7 +117,7 @@ class Survivor:
 
 
 class Island:
-    """Seeded island generator with three separated lakes and resource regions."""
+    """Seeded island generator with a central river, three lakes, and resources."""
 
     def __init__(self, size: int = 30, seed: int = 7) -> None:
         self.size = size
@@ -124,6 +128,13 @@ class Island:
         self._generate()
 
     def _generate(self) -> None:
+        river_x = self.size // 2
+        for y in range(self.size):
+            previous_x = river_x
+            river_x = max(self.size // 2 - 2, min(self.size // 2 + 2,
+                          river_x + self.random.choice((-1, 0, 0, 1))))
+            for x in range(min(previous_x, river_x), max(previous_x, river_x) + 1):
+                self.tiles[y][x].terrain = Terrain.RIVER
         for _ in range(11):
             cx = self.random.randrange(2, self.size - 2)
             cy = self.random.randrange(2, self.size - 2)
@@ -131,26 +142,30 @@ class Island:
             radius = self.random.choice((2, 2, 3))
             for y in range(max(0, cy - radius), min(self.size, cy + radius + 1)):
                 for x in range(max(0, cx - radius), min(self.size, cx + radius + 1)):
-                    if abs(x - cx) + abs(y - cy) <= radius and self.tiles[y][x].terrain != Terrain.LAKE:
+                    if abs(x - cx) + abs(y - cy) <= radius and not self.tiles[y][x].terrain.is_water:
                         self.tiles[y][x].terrain = terrain
 
         # Spread water across three regions, with seeded size/position variation.
         # Paint after terrain, leaving a walkable shoreline around each lake.
         self.lake_centers = []
-        for fx, fy in ((0.23, 0.27), (0.77, 0.33), (0.50, 0.77)):
+        for fx, fy in ((0.23, 0.27), (0.77, 0.33), (0.23, 0.77)):
             radius = max(1, min(self.size // 10, self.random.randint(2, 3)))
             margin = radius + 1
             cx = max(margin, min(self.size - margin - 1,
                                 round((self.size - 1) * fx) + self.random.randint(-1, 1)))
             cy = max(margin, min(self.size - margin - 1,
                                 round((self.size - 1) * fy) + self.random.randint(-1, 1)))
+            if self.size >= 20:
+                # Keep a land bank between each lake and the central river.
+                cx = (min(cx, self.size // 2 - radius - 4) if fx < 0.5 else
+                      max(cx, self.size // 2 + radius + 4))
             self.lake_centers.append((cx, cy))
             for y in range(max(0, cy - radius - 1), min(self.size, cy + radius + 2)):
                 for x in range(max(0, cx - radius - 1), min(self.size, cx + radius + 2)):
                     distance = (x - cx) ** 2 + (y - cy) ** 2
                     if distance <= radius ** 2:
                         self.tiles[y][x].terrain = Terrain.LAKE
-                    elif distance <= (radius + 1) ** 2:
+                    elif distance <= (radius + 1) ** 2 and self.tiles[y][x].terrain != Terrain.RIVER:
                         self.tiles[y][x].terrain = Terrain.GRASS
 
         for row in self.tiles:
@@ -268,7 +283,7 @@ class Simulation:
             FunctionTool("craft", "Craft an item from inventory resources", lambda item: self.craft(agent, item)),
             FunctionTool("build", "Build a structure on the current tile", lambda structure: self.build(agent, structure)),
             FunctionTool("eat", "Eat an inventory item", lambda item: self.eat(agent, item)),
-            FunctionTool("drink", "Drink when on or next to a lake", lambda: self.drink(agent)),
+            FunctionTool("drink", "Drink when on or next to a lake or river", lambda: self.drink(agent)),
             FunctionTool("flee", "Sprint two tiles away from a visible predator", lambda: self.flee(agent)),
             FunctionTool("attack", "Attack an adjacent predator", lambda predator_id: self.attack(agent, predator_id)),
             FunctionTool("rest", "Rest and recover health when safe", lambda: self.rest(agent)),
@@ -480,7 +495,7 @@ class Simulation:
         edge = self.world.size - 1
         positions = [(x, y) for x in range(self.world.size) for y in range(self.world.size)
                      if (x in (0, edge) or y in (0, edge)) and self.world.passable((x, y))
-                     and self.world.tile((x, y)).terrain != Terrain.LAKE]
+                     and not self.world.tile((x, y)).terrain.is_water]
         if not positions:
             return
         number = len(self.agents) + 1
@@ -547,7 +562,7 @@ class Simulation:
         positions = [(x, y) for x in range(self.world.size) for y in range(self.world.size)
                      if (x in (0, edge) or y in (0, edge))
                      and self.world.passable((x, y))
-                     and self.world.tile((x, y)).terrain != Terrain.LAKE]
+                     and not self.world.tile((x, y)).terrain.is_water]
         if not positions:
             return
         living = [agent for agent in self.agents if agent.alive]
@@ -557,7 +572,7 @@ class Simulation:
         anchor = self.random.choice(safe or positions)
         pack_id = f"pack-{self.predator_waves}" if kind == "wolf" else None
         nearby = [pos for pos in self.world.positions_within(anchor, 2)
-                  if self.world.passable(pos) and self.world.tile(pos).terrain != Terrain.LAKE
+                  if self.world.passable(pos) and not self.world.tile(pos).terrain.is_water
                   and all(self.distance(pos, agent.position) >= 4 for agent in living)]
         nearby.sort(key=lambda pos: self.distance(anchor, pos))
         pack_size = self.random.randint(2, 3) if kind == "wolf" else 1
@@ -605,7 +620,7 @@ class Simulation:
     def _water_distances(self) -> dict[Position, int]:
         # One shared breadth-first field per update, not one search per animal.
         distances = {(x, y): 0 for y, row in enumerate(self.world.tiles)
-                     for x, tile in enumerate(row) if tile.terrain == Terrain.LAKE}
+                     for x, tile in enumerate(row) if tile.terrain.is_water}
         queue = deque(distances)
         while queue:
             x, y = queue.popleft()
@@ -659,7 +674,7 @@ class Simulation:
             neighbors = [(predator.position[0] + dx, predator.position[1] + dy)
                          for dx, dy in self.DIRECTIONS.values()]
             neighbors = [pos for pos in neighbors if self.world.passable(pos)
-                         and self.world.tile(pos).terrain != Terrain.LAKE]
+                         and not self.world.tile(pos).terrain.is_water]
             radius = predator.hunting_radius(self.tick)
             living = [agent for agent in self.agents if agent.alive]
             shared = pack_targets.get(predator.pack_id)
@@ -797,7 +812,7 @@ class Simulation:
         discovered_lake = False
         for position in self.world.positions_within(agent.position, agent.visibility):
             tile = self.world.tile(position)
-            is_new_lake = tile.terrain == Terrain.LAKE and position not in agent.known_tiles
+            is_new_lake = tile.terrain.is_water and position not in agent.known_tiles
             discovered_lake = discovered_lake or is_new_lake
             agent.known_tiles[position] = tile.terrain
             for resource, positions in agent.known_resources.items():
@@ -809,11 +824,11 @@ class Simulation:
             seen.append({"position": position, "terrain": tile.terrain.value, "resources": dict(tile.resources), "shelter": tile.shelter_owner})
         nearby = [other.id for other in self.agents if other.id != agent.id and other.alive and self.distance(agent.position, other.position) <= agent.visibility]
         if discovered_lake:
-            lake = self.policy.nearest_known_terrain(agent, Terrain.LAKE)
+            lake = self.policy.nearest_known_water(agent)
             if lake is not None:
                 for other in self.agents:
                     if other.id != agent.id and other.alive:
-                        self.communicate(agent, other.id, f"lake:{lake[0]},{lake[1]}")
+                        self.communicate(agent, other.id, f"{self.world.tile(lake).terrain.value}:{lake[0]},{lake[1]}")
         threats = [{"id": item.id, "kind": item.kind, "position": item.position, "pack_id": item.pack_id,
                     "health": item.health, "hunger": item.hunger, "thirst": item.thirst,
                     "behavior": item.behavior} for item in self.visible_predators(agent)]
@@ -850,7 +865,7 @@ class Simulation:
         for item in ("berries", "ration"):
             if agent.inventory[item] > 0:
                 calls.append(ToolCall("eat", {"item": item}))
-        if any(self.world.tile(pos).terrain == Terrain.LAKE
+        if any(self.world.tile(pos).terrain.is_water
                for pos in self.world.positions_within(agent.position, 1)):
             calls.append(ToolCall("drink"))
         for other in self.agents:
@@ -936,10 +951,11 @@ class Simulation:
 
     def drink(self, agent: Survivor) -> Observation:
         adjacent = self.world.positions_within(agent.position, 1)
-        if not any(self.world.tile(position).terrain == Terrain.LAKE for position in adjacent):
-            raise ValueError("no lake within reach")
+        water = next((pos for pos in adjacent if self.world.tile(pos).terrain.is_water), None)
+        if water is None:
+            raise ValueError("no water within reach")
         agent.thirst = max(0.0, agent.thirst - 75.0)
-        return Observation("drink", "drank from lake", {"thirst": agent.thirst})
+        return Observation("drink", f"drank from {self.world.tile(water).terrain.value}", {"thirst": agent.thirst})
 
     def communicate(self, sender: Survivor, agent_id: str, message: str) -> Observation:
         recipient = next((agent for agent in self.agents if agent.id == agent_id and agent.alive), None)
@@ -1118,7 +1134,7 @@ class SurvivalPolicy:
         if sid == "prepare-water":
             if agent.thirst < 35:
                 return ToolCall("observe_surroundings"), True
-            water = self.nearest_known_terrain(agent, Terrain.LAKE)
+            water = self.nearest_known_water(agent)
             if water is None:
                 return self._explore(agent), False
             if self.sim.distance(agent.position, water) <= 1:
@@ -1150,7 +1166,7 @@ class SurvivalPolicy:
             known = self._target(agent, target)
             return (ToolCall("observe_surroundings"), True) if known is not None else (self._explore(agent), False)
         if sid in {"reach-water", "reach-shelter"}:
-            target = self.nearest_known_terrain(agent, Terrain.LAKE) if sid == "reach-water" else self._known_shelter(agent)
+            target = self.nearest_known_water(agent) if sid == "reach-water" else self._known_shelter(agent)
             if target is None:
                 return self._explore(agent), False
             if sid == "reach-water" and self.sim.distance(agent.position, target) <= 1:
@@ -1183,13 +1199,13 @@ class SurvivalPolicy:
         if sid == "build-shelter":
             return ToolCall("build", {"structure": "shelter"}), self.sim.world.tile(agent.position).shelter_owner == agent.id
         if sid == "share-water":
-            water = self.nearest_known_terrain(agent, Terrain.LAKE)
+            water = self.nearest_known_water(agent)
             recipient = next((other for other in self.sim.agents if other.id != agent.id and other.alive), None)
             if water is None or recipient is None:
                 return ToolCall("observe_surroundings"), True
             if step.evidence:
                 return ToolCall("observe_surroundings"), True
-            return ToolCall("communicate", {"agent_id": recipient.id, "message": f"lake:{water[0]},{water[1]}"}), False
+            return ToolCall("communicate", {"agent_id": recipient.id, "message": f"{self.sim.world.tile(water).terrain.value}:{water[0]},{water[1]}"}), False
         if sid == "rest":
             return ToolCall("rest"), agent.energy >= 70
         if sid == "explore":
@@ -1213,7 +1229,7 @@ class SurvivalPolicy:
 
     def _target(self, agent: Survivor, target: str) -> Position | None:
         if target == "water":
-            return self.nearest_known_terrain(agent, Terrain.LAKE)
+            return self.nearest_known_water(agent)
         if target == "shelter":
             return self._known_shelter(agent)
         return self._nearest_resource(agent, {"food": "berries"}.get(target, target))
@@ -1225,6 +1241,9 @@ class SurvivalPolicy:
     def nearest_known_terrain(self, agent: Survivor, terrain: Terrain) -> Position | None:
         positions = [pos for pos, known in agent.known_tiles.items() if known == terrain]
         return min(positions, key=lambda pos: self.sim.distance(agent.position, pos), default=None)
+
+    def nearest_known_water(self, agent: Survivor) -> Position | None:
+        return self._nearest_known(agent, lambda pos: agent.known_tiles[pos].is_water)
 
     def _known_shelter(self, agent: Survivor) -> Position | None:
         return self._nearest_known(agent, lambda pos: self.sim.world.tile(pos).shelter_owner is not None)
@@ -1272,12 +1291,12 @@ class SurvivalPolicy:
     def _read_messages(self, agent: Survivor) -> None:
         while agent.inbox:
             message = agent.inbox.popleft()
-            if message.text.startswith("lake:"):
-                coordinates = message.text.removeprefix("lake:").split(",")
+            if message.text.startswith(("lake:", "river:")):
+                coordinates = message.text.split(":", 1)[1].split(",")
                 try:
                     position = int(coordinates[0]), int(coordinates[1])
                 except (ValueError, IndexError):
                     continue
                 if self.sim.world.in_bounds(position):
-                    agent.known_tiles[position] = Terrain.LAKE
-                    self.sim.trace.record("memory.updated", {"tick": self.sim.tick, "agent": agent.id, "fact": "lake", "position": position, "source": message.sender})
+                    agent.known_tiles[position] = Terrain(message.text.split(":", 1)[0])
+                    self.sim.trace.record("memory.updated", {"tick": self.sim.tick, "agent": agent.id, "fact": "water", "position": position, "source": message.sender})

@@ -3,10 +3,12 @@
 A deterministic 30×30 agent simulation demonstrating long-running plans,
 replanning, bounded tools, partial observability, communication, and conflicting
 survival needs. Five autonomous survivors explore a generated island, find water
-and food, gather materials, craft tools, and build shelters. Three separate lakes
+and food, gather materials, craft tools, and build shelters. The central river is
+retained, with three additional separate lakes
 are spread across different map regions, with seeded sizes/positions and walkable
 shorelines. Survivors can drink from a lake or an adjacent tile and share lake
-locations, rather than all relying on a central river.
+locations, giving them alternatives to relying only on the central river. River
+and lake water both work for drinking, communication, and predator water seeking.
 
 Run with the deterministic reference policy, or let a local model propose
 persistent milestone plans. Both execute through the same world tools.
@@ -102,7 +104,7 @@ Predator hunger controls hunting range: below 40 is calm, then 2/6/10 tiles at
 nonfatal hits do not feed them. Calm animals defend themselves for 12 ticks if
 attacked. Survivors distinguish calm animals from threats, so can rest or sleep
 near well-fed predators. Each arrival has varied hunger (45–75) and thirst (10–35).
-At 55 thirst predators seek a reachable lake shore; drinking reduces thirst by 65.
+At 55 thirst predators seek a reachable riverbank or lake shore; drinking reduces thirst by 65.
 At 85 thirst water takes priority even over adjacent prey. A shared breadth-first
 distance field routes them around mountains without entering water, without LLM
 calls. They continue meeting needs when no survivors remain.

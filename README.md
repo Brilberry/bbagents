@@ -19,10 +19,10 @@ pytest
 
 ## Survival Island example
 
-Five autonomous survivors explore a seeded 30×30 island of forests, three lakes,
+Five autonomous survivors explore a seeded 30×30 island of forests, a central river, three lakes,
 mountains, and grassland. Each has health, hunger, thirst, energy, an inventory,
 a personal objective, a limited view of the world, remembered terrain and
-resources, and a message inbox. They gather wood and berries, drink from lakes,
+resources, and a message inbox. They gather wood and berries, drink from rivers or lakes,
 craft tools, and build shelters while their survival needs change over time.
 
 ![Survival Island after 120 ticks with the reference policy](examples/survival_island/screenshot.png)
@@ -49,7 +49,7 @@ For example, Ari needs shelter. She remembers a forest, moves there, and gathers
 wood. If she becomes thirsty, she can interrupt that work to find water. If another
 survivor has taken the last wood, the gather action is rejected; that feedback
 helps her choose a different action next time. Survivors can also tell each other
-where they found a lake. Three separated lakes in different map regions, each
+where they found water. The central river remains, plus three separated lakes in different map regions, each
 with a walkable shoreline, provide alternatives to a single central water corridor.
 
 `bbagents` supplies the building blocks behind this loop:
@@ -134,9 +134,9 @@ reduces the killer's hunger by 65 and nearby packmates' by 45; nonfatal attacks
 do not feed them. Attacking a calm predator provokes self-defense for 12 ticks.
 Survivors can rest or sleep near calm animals rather than fleeing indefinitely.
 
-At 55 thirst predators seek reachable lake shores and drink to reduce thirst by
+At 55 thirst predators seek reachable riverbanks or lake shores and drink to reduce thirst by
 65. At 85 thirst this takes priority even over adjacent prey. They navigate around
-mountains without entering lakes, and continue drinking/roaming when no survivors
+mountains without entering water, and continue drinking/roaming when no survivors
 remain. Water navigation is a shared distance field, not model inference.
 Hunger rises by 0.025 and thirst by 0.04 per tick—22× and 20× slower than awake
 survivors. Only at 100 do they take need damage: 0.08 HP/tick for starvation and
