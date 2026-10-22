@@ -29,48 +29,49 @@ craft tools, and build shelters while their survival needs change over time.
 
 ### How it works
 
-The application owns the simulation loop. On each tick it updates needs, asks a
-policy for one action per living survivor, and executes that action through a
-per-agent `bbagents.ToolRegistry`. `FunctionTool` binds each tool to its survivor;
-world methods enforce resource costs, valid locations, and inventory requirements.
-Tools return `Observation` objects, and `InMemoryTrace` records decisions,
-replanning, execution results, failures, and communicated knowledge.
+Each survivor repeats the same loop: observe what it knows, choose an action,
+try it in the world, and use the result to decide what to do next.
 
-The reference policy constructs persistent `Plan` objects with dependent
-`PlanStep` objects. An urgent need interrupts the current plan: a thirsty survivor
-locates water, travels there, and drinks before resuming its personal objective.
-Agents share river coordinates through messages. Movement uses pathfinding;
-stationary observation restores energy, shelters improve rest, and forest berries
-replenish each day. Hunger and thirst increase toward 100; energy decreases toward
-zero. Dangerous levels damage health.
+```mermaid
+flowchart LR
+    O["Observe<br/>Needs, inventory, visible terrain,<br/>remembered resources and messages"]
+    D["Decide<br/>Rule policy or local LLM<br/>Choose one available action"]
+    E["Execute<br/>Check the current world<br/>Run the tool if valid"]
+    F["Feedback<br/>Result or rejection<br/>Update the agent's knowledge"]
+    O -->|ContextBuilder| D
+    D -->|Validated ToolCall| E
+    E -->|Observation| F
+    F -->|Next decision| O
+```
 
-An optional local LLM policy sends each survivor's needs, inventory, remembered
-map, resources, messages, previous proposed plan, and latest action result to an
-Ollama-compatible server. The model returns a goal, a short plan, and one tool
-call constrained by a tool-specific JSON schema. `ContextBuilder` budgets each
-snapshot; `DecisionRuntime` validates proposals, retries a failed decision once,
-and traces attempts. A single background worker serves agents in turn. Pending
-agents observe/rest; urgent needs invoke the reference policy. Rendering continues.
-The world validates actions before execution. Failed requests expose the actual
-error in the event log and terminal. The sidebar counts accepted model proposals
-and failed requests; acceptance does not guarantee world execution.
+For example, Ari needs shelter. She remembers a forest, moves there, and gathers
+wood. If she becomes thirsty, she can interrupt that work to find water. If another
+survivor has taken the last wood, the gather action is rejected; that feedback
+helps her choose a different action next time. Survivors can also tell each other
+where they found a river.
 
-Each request includes the current tile's resources and explicit `available_actions`.
-`DecisionRequest.validate` checks the chosen call against those action preconditions
-inside `DecisionRuntime`. The simulation checks again when the response arrives,
-since another survivor may have depleted a resource while the request was running.
-Unavailable proposals produce rejection observations instead of world mutations.
-The latest eight tool results, failures, and rejections are retained as `Observation`
-feedback in the next request. Visible depleted resources are removed from personal
-memory; unseen locations remain remembered until revisited.
-The most recent failure is also retained separately so idle observations cannot
-erase it before the next model request.
+`bbagents` supplies the building blocks behind this loop:
 
-**Current limitation:** model plans are advisory and displayed in the sidebar;
-they are revised on subsequent model responses rather than executed as persistent
-action sequences. Rule-policy actions still run between responses. This is a
-hybrid prototype, not a simulation wholly controlled by an LLM. Voice, weather,
-seasons, disease, and predators are future additions.
+- **Observation:** `ContextBuilder` assembles a bounded view of the survivor's
+  situation, recent results, and available actions for the model.
+- **Decision:** `DecisionRuntime` validates model output and action preconditions,
+  retries a failed decision once, and records attempts. The rule policy instead
+  follows a `Plan` made of dependent `PlanStep` objects.
+- **Execution:** `ToolRegistry` exposes actions such as `move`, `gather`, and
+  `build`. The game checks their preconditions again before changing the world.
+- **Feedback:** tools return `Observation` objects. Results and failures feed the
+  next model request; observed depletion updates the survivor's resource memory.
+  `InMemoryTrace` records the model decisions and tool executions for inspection.
+
+You can run entirely with the rule policy or enable a local LLM through Ollama.
+Model requests run in the background while the game continues. Waiting agents
+observe/rest; urgent needs and failed requests use the rule policy. The sidebar
+shows model proposal counts and errors, with full errors in the terminal.
+
+**Current limitation:** the LLM proposes one action per response. Its longer plan
+is displayed and reconsidered on later responses, but is not automatically
+executed as a sequence. Voice, weather, seasons, disease, and predators are future
+additions.
 
 ### Run locally
 
