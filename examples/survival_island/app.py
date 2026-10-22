@@ -156,6 +156,20 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
                 screen.blit(small.render(line[:59], True, (160, 165, 170)), (left, y))
                 y += 16
 
+            mx, my = pygame.mouse.get_pos()
+            hovered = next((predator for predator in sim.predators if predator.alive
+                            and predator.position == (mx // tile_size, my // tile_size)), None)
+            if hovered:
+                details = [f"{hovered.id} ({hovered.kind}) · {hovered.behavior}",
+                           f"HP {hovered.health:.0f}  hunger {hovered.hunger:.0f}  thirst {hovered.thirst:.0f}"]
+                labels = [small.render(line, True, (240, 240, 240)) for line in details]
+                width = max(label.get_width() for label in labels) + 12
+                tx = max(0, min(mx + 12, screen.get_width() - width))
+                ty = max(0, min(my + 12, screen.get_height() - 44))
+                pygame.draw.rect(screen, (25, 28, 32), (tx, ty, width, 44))
+                for index, label in enumerate(labels):
+                    screen.blit(label, (tx + 6, ty + 5 + index * 17))
+
             pygame.display.flip()
             if screenshot:
                 pygame.image.save(screen, screenshot)

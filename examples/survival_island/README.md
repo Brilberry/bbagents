@@ -97,6 +97,21 @@ by 75%. Immediate rule-based defense overrides model latency. Wolves and bears
 are marked W and B on the map; combat appears in events and traces.
 Use `Simulation(predator_interval=None)` for a predator-free baseline.
 
+Predator hunger controls hunting range: below 40 is calm, then 2/6/10 tiles at
+40/60/85. Kills reduce the killer's hunger by 65 and nearby packmates' by 45;
+nonfatal hits do not feed them. Calm animals defend themselves for 12 ticks if
+attacked. Survivors distinguish calm animals from threats, so can rest or sleep
+near well-fed predators. Each arrival has varied hunger (45–75) and thirst (10–35).
+At 55 thirst predators seek a reachable lake shore; drinking reduces thirst by 65.
+At 85 thirst water takes priority even over adjacent prey. A shared breadth-first
+distance field routes them around mountains without entering water, without LLM
+calls. They continue meeting needs when no survivors remain.
+Needs rise by 0.025 hunger/0.04 thirst per tick, versus survivors' 0.55/0.8.
+At 100 they take 0.08 starvation/0.12 dehydration damage per tick, giving them
+much longer endurance. Hover over an animal for HP, hunger, thirst, and behavior.
+Predator needs, feeding, drinking, and deaths are included in traces and visible
+predator details in survivor timelines.
+
 Every 1,000 ticks a new survivor arrives on a random land tile at the map edge.
 `claim_shelter()` allows free reuse of unassigned/abandoned homes; builders keep
 using a valid existing home. Scroll the sidebar or use Page Up / Page Down to

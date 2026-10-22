@@ -158,7 +158,7 @@ class ModelPolicy(SurvivalPolicy):
 
     def _signature(self, agent):
         return (agent.home, bool(self.nearest_known_terrain(agent, Terrain.LAKE)),
-                tuple(sorted(item.id for item in self.sim.visible_predators(agent))),
+                tuple(sorted(item.id for item in self.sim.threatening_predators(agent))),
                 (agent.last_failure.source, agent.last_failure.content,
                  agent.last_failure.metadata.get("tick")) if agent.last_failure else None)
 
@@ -216,7 +216,7 @@ class ModelPolicy(SurvivalPolicy):
     def _eligible(self, agent):
         self._register(agent)
         return (agent.alive and not agent.sleep_remaining and not agent.suspended_plan_key
-                and not self.sim.visible_predators(agent) and not self._emergency(agent)
+                and not self.sim.threatening_predators(agent) and not self._emergency(agent)
                 and self.clock() >= self.next_request.get(agent.id, 0)
                 and self.sim.tick >= self.next_request_tick[agent.id]
                 and self._needs_request(agent))
@@ -287,7 +287,7 @@ class ModelPolicy(SurvivalPolicy):
         self.signatures[agent.id] = signature
         recovering = (agent.plan_reason in {"hunger emergency", "thirst emergency", "energy emergency"} and agent.current_plan
                       and not agent.current_plan.is_complete())
-        if (self.sim.visible_predators(agent) or self._emergency(agent) or recovering
+        if (self.sim.threatening_predators(agent) or self._emergency(agent) or recovering
                 or agent.suspended_plan_key or agent.resume_pending
                 or (self.sim.tick % self.sim.day_length >= 44
                     and agent.night_cycle != self.sim.tick // self.sim.day_length)):

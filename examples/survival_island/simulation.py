@@ -60,10 +60,20 @@ class Predator:
     health: float
     pack_id: str | None = None
     next_attack_tick: int = 0
+    hunger: float = 60.0
+    thirst: float = 12.0
+    provoked_until: int = -1
+    last_needs_tick: int = -1
+    behavior: str = "roaming"
 
     @property
     def alive(self) -> bool:
         return self.health > 0
+
+    def hunting_radius(self, tick: int) -> int:
+        if tick <= self.provoked_until:
+            return 10
+        return 10 if self.hunger >= 85 else 6 if self.hunger >= 60 else 2 if self.hunger >= 40 else 0
 
 
 @dataclass(slots=True)
@@ -343,7 +353,9 @@ class Simulation:
                 "model_plan_goal": model_plan.goal if model_plan else None,
                 "plan_reason": agent.plan_reason,
                 "visible_predators": [{"id": item.id, "kind": item.kind, "position": item.position,
-                                       "health": item.health, "pack_id": item.pack_id}
+                                       "health": item.health, "pack_id": item.pack_id,
+                                       "hunger": item.hunger, "thirst": item.thirst,
+                                       "behavior": item.behavior}
                                       for item in self.visible_predators(agent)]})
             if not agent.alive:
                 agent.death_tick = self.tick
@@ -383,7 +395,7 @@ class Simulation:
                        and other.position == position for other in self.agents)
 
     def sleep(self, agent: Survivor) -> Observation:
-        if agent.sleep_remaining or self.visible_predators(agent) or agent.hunger >= 80 or agent.thirst >= 80:
+        if agent.sleep_remaining or self.threatening_predators(agent) or agent.hunger >= 80 or agent.thirst >= 80:
             raise ValueError("sleep requires being awake, safe, fed, and hydrated")
         if not self.sleep_site_available(agent, agent.position):
             raise ValueError("shelter already has a sleeping survivor")
@@ -402,7 +414,7 @@ class Simulation:
         return Observation("sleep", "started sleeping (12 ticks)", {"remaining": 12})
 
     def _advance_sleep(self, agent: Survivor) -> None:
-        reason = ("predator" if self.visible_predators(agent) else
+        reason = ("predator" if self.threatening_predators(agent) else
                   "thirst" if agent.thirst >= 80 else
                   "hunger" if agent.hunger >= 80 else None)
         if reason:
@@ -459,6 +471,10 @@ class Simulation:
     def visible_predators(self, agent: Survivor) -> list[Predator]:
         return [predator for predator in self.predators if predator.alive
                 and self.distance(agent.position, predator.position) <= agent.visibility]
+
+    def threatening_predators(self, agent: Survivor) -> list[Predator]:
+        return [predator for predator in self.visible_predators(agent)
+                if predator.hunting_radius(self.tick) > 0]
 
     def _spawn_survivor(self) -> None:
         edge = self.world.size - 1
@@ -548,10 +564,12 @@ class Simulation:
         for index in range(pack_size):
             position = nearby[index % len(nearby)] if nearby else anchor
             predator = Predator(f"predator-{len(self.predators) + 1}", kind,
-                                position, 150 if kind == "bear" else 45, pack_id)
+                                position, 150 if kind == "bear" else 45, pack_id,
+                                hunger=self.random.uniform(45, 75), thirst=self.random.uniform(10, 35))
             self.predators.append(predator)
             self.trace.record("predator.spawned", {"tick": self.tick, "id": predator.id,
-                                                   "kind": kind, "pack_id": pack_id})
+                                                   "kind": kind, "pack_id": pack_id,
+                                                   "hunger": predator.hunger, "thirst": predator.thirst})
         arrival = "a lone bear" if kind == "bear" else f"a pack of {pack_size} wolves"
         self.event_log.appendleft(f"Tick {self.tick}: {arrival} arrived")
 
@@ -570,7 +588,47 @@ class Simulation:
                     self.trace.record("predator.packs_merged", {"tick": self.tick, "pack_id": new,
                                                                "absorbed": old, "size": size})
 
+    def _apply_predator_needs(self, predator: Predator) -> None:
+        if not predator.alive or predator.last_needs_tick == self.tick:
+            return
+        predator.last_needs_tick = self.tick
+        predator.hunger = min(100, predator.hunger + 0.025)
+        predator.thirst = min(100, predator.thirst + 0.04)
+        damage = (0.08 if predator.hunger >= 100 else 0) + (0.12 if predator.thirst >= 100 else 0)
+        predator.health = max(0, predator.health - damage)
+        if damage:
+            self.trace.record("predator.need_damage", {"predator": predator.id, "damage": damage,
+                "hunger": predator.hunger, "thirst": predator.thirst, "health": predator.health})
+            if not predator.alive:
+                self.trace.record("predator.died", {"predator": predator.id, "cause": "unmet needs"})
+
+    def _water_distances(self) -> dict[Position, int]:
+        # One shared breadth-first field per update, not one search per animal.
+        distances = {(x, y): 0 for y, row in enumerate(self.world.tiles)
+                     for x, tile in enumerate(row) if tile.terrain == Terrain.LAKE}
+        queue = deque(distances)
+        while queue:
+            x, y = queue.popleft()
+            for dx, dy in self.DIRECTIONS.values():
+                position = (x + dx, y + dy)
+                if position not in distances and self.world.passable(position):
+                    distances[position] = distances[(x, y)] + 1
+                    queue.append(position)
+        return distances
+
+    def _feed_predators(self, predator: Predator, prey: Survivor) -> None:
+        eaters = [predator] + [other for other in self.predators
+            if other is not predator and other.alive and predator.pack_id is not None
+            and other.pack_id == predator.pack_id and self.distance(other.position, prey.position) <= 2]
+        for eater in eaters:
+            eater.hunger = max(0, eater.hunger - (65 if eater is predator else 45))
+            eater.behavior = "feeding"
+            self.trace.record("predator.fed", {"predator": eater.id, "agent": prey.id,
+                                              "hunger": eater.hunger})
+
     def _update_predators(self) -> None:
+        for predator in self.predators:
+            self._apply_predator_needs(predator)
         self._merge_wolf_packs()
         # Bears act twice as often as wolves.
         if self.tick % 2:
@@ -580,29 +638,50 @@ class Simulation:
         pack_targets: dict[str, Survivor] = {}
         leaders: dict[str, Predator] = {}
         living = [agent for agent in self.agents if agent.alive]
-        if not living:
-            return
+        water_distances = (self._water_distances()
+                           if any(item.alive and item.thirst >= 55 for item in self.predators) else {})
         for predator in self.predators:
             if not predator.alive or predator.pack_id is None or predator.pack_id in leaders:
                 continue
             members = [item for item in self.predators if item.alive and item.pack_id == predator.pack_id]
             leaders[predator.pack_id] = predator
+            if not living:
+                continue
             prey = min(living, key=lambda agent: min(self.distance(item.position, agent.position) for item in members))
-            if any(self.distance(item.position, prey.position) <= 6 for item in members):
+            if any(0 < item.hunting_radius(self.tick) >= self.distance(item.position, prey.position)
+                   and item.thirst < 85 for item in members):
                 pack_targets[predator.pack_id] = prey
         for predator in self.predators:
             if not predator.alive:
                 continue
             if predator.kind == "wolf" and self.tick % 4:
                 continue
+            neighbors = [(predator.position[0] + dx, predator.position[1] + dy)
+                         for dx, dy in self.DIRECTIONS.values()]
+            neighbors = [pos for pos in neighbors if self.world.passable(pos)
+                         and self.world.tile(pos).terrain != Terrain.LAKE]
+            radius = predator.hunting_radius(self.tick)
             living = [agent for agent in self.agents if agent.alive]
-            if not living:
-                return
             shared = pack_targets.get(predator.pack_id)
             target = (shared if shared is not None and shared.alive else
-                      min(living, key=lambda agent: self.distance(predator.position, agent.position)))
-            distance = self.distance(predator.position, target.position)
-            if distance <= 1:
+                      min(living, key=lambda agent: self.distance(predator.position, agent.position), default=None))
+            distance = self.distance(predator.position, target.position) if target else float("inf")
+            hunt = (radius > 0 and predator.thirst < 85 and target is not None
+                    and (shared is not None or distance <= radius))
+            if predator.thirst >= 55 and (predator.thirst >= 85 or not hunt or distance > 1):
+                if water_distances.get(predator.position) == 1:
+                    predator.thirst = max(0, predator.thirst - 65)
+                    predator.behavior = "drinking"
+                    self.trace.record("predator.drank", {"predator": predator.id,
+                        "position": predator.position, "thirst": predator.thirst})
+                    continue
+                reachable = [pos for pos in neighbors if pos in water_distances]
+                if reachable:
+                    predator.position = min(reachable, key=water_distances.get)
+                    predator.behavior = "seeking water"
+                    continue
+            predator.behavior = "hunting" if hunt else "roaming"
+            if hunt and distance <= 1:
                 if self.tick < predator.next_attack_tick:
                     continue
                 damage = 30 if predator.kind == "bear" else 7
@@ -613,6 +692,7 @@ class Simulation:
                 target.alive = target.health > 0
                 if not target.alive:
                     target.death_cause = f"{predator.kind} attack ({predator.id})"
+                    self._feed_predators(predator, target)
                 if target.sleep_remaining:
                     self._wake(target, "predator attack", interrupted=True)
                 result = Observation("predator.attack", f"{predator.kind} hit for {damage:g} damage",
@@ -622,14 +702,11 @@ class Simulation:
                 self.event_log.appendleft(f"Tick {self.tick}: {predator.kind} attacked {target.name}")
                 self.trace.record("predator.attacked", {"tick": self.tick, "agent": target.id,
                                                         "predator": predator.id, "damage": damage,
-                                                        "pack_id": predator.pack_id})
+                                                        "pack_id": predator.pack_id,
+                                                        "hunger": predator.hunger, "thirst": predator.thirst})
                 continue
-            neighbors = [(predator.position[0] + dx, predator.position[1] + dy)
-                         for dx, dy in self.DIRECTIONS.values()]
-            neighbors = [pos for pos in neighbors if self.world.passable(pos)
-                         and self.world.tile(pos).terrain != Terrain.LAKE]
             if neighbors:
-                if shared is not None or distance <= 6:
+                if hunt:
                     predator.position = min(neighbors, key=lambda pos: self.distance(pos, target.position))
                 elif predator.pack_id and leaders[predator.pack_id] is not predator:
                     leader = leaders[predator.pack_id]
@@ -637,6 +714,11 @@ class Simulation:
                 else:
                     predator.position = self.random.choice(neighbors)
         self._merge_wolf_packs()
+        for predator in self.predators:
+            if predator.alive:
+                self.trace.record("predator.state", {"predator": predator.id, "kind": predator.kind,
+                    "position": predator.position, "health": predator.health,
+                    "hunger": predator.hunger, "thirst": predator.thirst, "behavior": predator.behavior})
 
     def flee(self, agent: Survivor) -> Observation:
         threats = self.visible_predators(agent)
@@ -661,6 +743,7 @@ class Simulation:
             raise ValueError("attack requires adjacency, 4 energy, and a completed 3-tick cooldown")
         damage = 25 if agent.inventory["spear"] else 12 if agent.inventory["axe"] else 5
         predator.health = max(0, predator.health - damage)
+        predator.provoked_until = self.tick + 12
         agent.energy -= 4
         agent.next_attack_tick = self.tick + 3
         outcome = "defeated" if not predator.alive else f"hit for {damage}"
@@ -670,7 +753,7 @@ class Simulation:
         return Observation("attack", f"{outcome} {predator.kind}", {"predator_id": predator.id})
 
     def rest(self, agent: Survivor) -> Observation:
-        if self.visible_predators(agent):
+        if self.threatening_predators(agent):
             raise ValueError("cannot rest near a visible predator")
         sheltered = self.world.tile(agent.position).shelter_owner is not None
         recovery = 6 if sheltered else 3
@@ -732,14 +815,15 @@ class Simulation:
                     if other.id != agent.id and other.alive:
                         self.communicate(agent, other.id, f"lake:{lake[0]},{lake[1]}")
         threats = [{"id": item.id, "kind": item.kind, "position": item.position, "pack_id": item.pack_id,
-                    "health": item.health} for item in self.visible_predators(agent)]
+                    "health": item.health, "hunger": item.hunger, "thirst": item.thirst,
+                    "behavior": item.behavior} for item in self.visible_predators(agent)]
         return Observation("world", f"Observed {len(seen)} tiles and {len(nearby)} nearby agents", {"tiles": seen, "nearby_agents": nearby, "predators": threats})
 
     def available_actions(self, agent: Survivor) -> list[ToolCall]:
         """Concrete legal calls at this location; message text remains free-form."""
         tile = self.world.tile(agent.position)
         calls = [ToolCall("observe_surroundings")]
-        threats = self.visible_predators(agent)
+        threats = self.threatening_predators(agent)
         if (not threats and not agent.sleep_remaining and agent.hunger < 80 and agent.thirst < 80
                 and self.sleep_site_available(agent, agent.position)):
             calls.append(ToolCall("sleep"))
@@ -942,7 +1026,7 @@ class SurvivalPolicy:
             "checkpoint": agent.suspended_plan_key, "tick": self.sim.tick})
 
     def defend(self, agent: Survivor) -> ToolCall | None:
-        threats = self.sim.visible_predators(agent)
+        threats = self.sim.threatening_predators(agent)
         if not threats:
             if agent.health < 80 and agent.hunger < 68 and agent.thirst < 64:
                 return ToolCall("rest")

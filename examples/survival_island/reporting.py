@@ -159,7 +159,12 @@ def summarize(agent_id, name, cause, death_tick, events, directory, *, model, en
                 "that a different choice guarantees survival. State uncertainty and incomplete evidence. "
                 f"The context budget omitted {context.omitted_items} items; treat missing history as unknown. "
                 "Game rules: hunger >=90 causes starvation damage, thirst >=90 causes dehydration "
-                "damage, and energy <=2 causes exhaustion damage. Need damage is applied each tick. "
+                "damage, and energy <=2 causes exhaustion damage. Need damage is applied each awake tick; "
+                "sleep freezes hunger/thirst, pauses need damage, and recovers health and energy. "
+                "Predators normally hunt at hunger >=40, pursue farther at 60 and 85, and seek "
+                "water at thirst >=55 (urgent at 85). A kill feeds them; a nonfatal attack does not. "
+                "Attacking a calm predator provokes it for 12 ticks. Wolves hit for 7 every 4 ticks; "
+                "bears hit for 30 every 6 ticks. Shelters reduce incoming damage by 75%. "
                 "Return a concise summary, likely_contributors, uncertainties, and evidence_ticks."),
         context=context, schema=PostmortemSchema(),
         validate=lambda value: all(tick in included_ticks for tick in value["evidence_ticks"]),

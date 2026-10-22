@@ -127,9 +127,26 @@ When members of different wolf packs meet on the same or adjacent tiles, both
 packs merge, including distant packmates, and share a target. Merges can create
 packs larger than three. Bears never join packs.
 
+Predators have hunger and thirst (0–100). Below 40 hunger they roam calmly;
+at 40/60/85 their hunting range grows to 2/6/10 tiles. Hungry wolves share prey,
+but a well-fed packmate does not hunt just because another wolf does. A kill
+reduces the killer's hunger by 65 and nearby packmates' by 45; nonfatal attacks
+do not feed them. Attacking a calm predator provokes self-defense for 12 ticks.
+Survivors can rest or sleep near calm animals rather than fleeing indefinitely.
+
+At 55 thirst predators seek reachable lake shores and drink to reduce thirst by
+65. At 85 thirst this takes priority even over adjacent prey. They navigate around
+mountains without entering lakes, and continue drinking/roaming when no survivors
+remain. Water navigation is a shared distance field, not model inference.
+Hunger rises by 0.025 and thirst by 0.04 per tick—22× and 20× slower than awake
+survivors. Only at 100 do they take need damage: 0.08 HP/tick for starvation and
+0.12 for dehydration. Thus food/water deprivation takes much longer to kill them.
+Arrivals have varied hunger (45–75) and thirst (10–35). Hover over W/B to inspect
+HP, needs, and behavior; needs, drinking, feeding, and deaths are also traced.
+
 Survivors can `craft("spear")` using three wood, `attack(predator_id)` when
 adjacent, `flee()` two tiles at an energy cost, or `rest()` when no predator is
-visible. A spear deals 25 damage, an axe 12, and bare hands 5. Shelters reduce
+threatening. A spear deals 25 damage, an axe 12, and bare hands 5. Shelters reduce
 incoming damage by 75%. Rest restores energy and slowly heals fed, hydrated agents.
 Attacks cost 4 energy and have a three-tick cooldown, so a survivor cannot strike
 repeatedly before a bear responds. The rule policy prefers fleeing when outnumbered,
