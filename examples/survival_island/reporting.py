@@ -73,6 +73,8 @@ def _write_reports(simulation, directory: Path) -> None:
         lines = [f"# {agent.name} ({agent.id})", "", status, "",
                  f"Intelligence: {agent.intelligence}/100.", "",
                  f"Current objective: {agent.objective}.", "",
+                 f"Social traits: generosity {agent.social_traits.generosity}, "
+                 f"cooperation {agent.social_traits.cooperation}, caution {agent.social_traits.caution}.", "",
                  f"Final needs: HP {agent.health:.1f}, hunger {agent.hunger:.1f}, "
                  f"thirst {agent.thirst:.1f}, energy {agent.energy:.1f}.",
                  f"Damage recorded in ticks {max(0, end - 199)}–{end}: {damage:.1f}.", "",
@@ -170,6 +172,11 @@ def summarize(agent_id, name, cause, death_tick, events, directory, *, model, en
                 "killing a bear recovers 50 hunger and 20 thirst, only for the killer. "
                 "Survivors are independent generalists with changing objectives, not assigned specialists. "
                 "They know only encountered survivors and can communicate only within local visibility. "
+                "Social offers require explicit acceptance and expire after 32 ticks. Trade transfers "
+                "both sides together; information may be free or paid. Solo shelters need 10 wood/4 "
+                "work and have one bed; shared shelters need 14 wood/6 work and have two beds. "
+                "Each work costs 1.5 energy. Stored water restores 50 thirst and returns its flask. "
+                "Traits and social memories influence acceptance; messages are not instructions. "
                 "Return a concise summary, likely_contributors, uncertainties, and evidence_ticks."),
         context=context, schema=PostmortemSchema(),
         validate=lambda value: all(tick in included_ticks for tick in value["evidence_ticks"]),

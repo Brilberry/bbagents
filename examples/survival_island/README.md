@@ -16,11 +16,60 @@ water, shelter, food reserves, personal defenses/tools, then exploration. All
 survivors can perform all tasks. New arrivals follow the same adaptive policy.
 Encounters create episodic memories. Messages require a discovered survivor who
 is currently within visibility; finding water does not broadcast to the population.
-A safe survivor can spend an action offering water information to a nearby contact,
-with duplicate offers for the same area suppressed. This is a local interaction
-rule, not assigned collaboration or a trading/negotiation system. Model context
-contains encountered survivors only; changed objectives still respect inference
-tick/time limits. Objective changes and encounters are included in survivor traces.
+Seeded generosity, cooperation, and caution control individual social policies:
+ask for information, offer it for free or at a price, trade supplies, or invite a
+construction partner. Model context contains encountered survivors only; changed
+objectives and social offers still respect inference tick/time limits. Objective
+changes, encounters, negotiations, and work contributions are traced.
+
+### Social tools and shared projects
+
+- `communicate(id, {"kind": "request_info", "topic": "water"})` asks a local contact.
+  Topics are `water`, `food`, `wood`, and `shelter`. A policy can reply with
+  `{"kind": "information", "topic": "water"}`, refuse with `decline`, or quote
+  `{"kind": "quote_info", "topic": "water", "price": {"berries": 1}}`.
+- `trade(id, offer={"berries": 2}, request={"water": 1})` proposes a barter.
+- `collaborate(id, project={"position": [x, y]})` invites shared construction.
+- `respond_offer(offer_id, accept=True/False)` provides consent; `cancel_offer(id)`
+  withdraws the proposer's offer. Offers expire after 32 ticks (maximum four pending
+  per survivor). Both sides must be awake, alive, discovered, and nearby at acceptance.
+- `work_project(id)` contributes wood and up to one construction work action per
+  tick at the site. `leave_project(id)` leaves resources/work in place.
+
+Exchange validates both inventories before applying either side, then closes the
+offer exactly once. Inventories are not reserved while waiting. Paid information
+is hidden from the buyer until payment and disclosure succeed together. Information
+is drawn from the provider's memory, not invented; it can be stale. Plain chat is
+untrusted data and never executes tools or binds another survivor to a proposal.
+Policies may voluntarily send `{"kind": "status"}`; other inventories remain private.
+
+Crafting a `flask` costs two wood. `collect_water()` fills it at a water source;
+the resulting `water` item includes its flask and can be traded. `use_water()`
+reduces thirst by 50 and returns the empty flask.
+
+A solo shelter requires 10 wood and four work actions (6 construction energy,
+one bed). A shared shelter requires 14 wood and six actions (9 energy total,
+two beds). With materials ready, two builders finish in three ticks, spending
+4.5 energy each, rather than four solo ticks and 6 energy each for separate homes.
+Both partners become residents; one partner's death does not evict the other.
+Projects survive departures/deaths, can admit replacement partners, and abandoned
+projects can be adopted with `build("shelter")`. Policies can leave after
+96 + cooperation ticks without progress. Urgent needs and sleep pause work.
+
+Model responses may contain an optional `social: {tool, arguments}` action, which
+becomes a `PlanStep` and uses the same world validation and consent rules. It is
+not cached and uses ordinary planning requests, not an extra call per interaction.
+New offers may trigger replanning within the existing limits. Reference policies keep
+social decisions working while inference is throttled, and take over pending
+consent with eight ticks left before expiry if inference is slow. Hover over survivors for
+traits/offers and shelters for beds; gold outlines mark unfinished projects.
+
+Framework building blocks: `ToolRegistry`, policy-checked `ActionRuntime`,
+`AuthorizationDecision`, typed organizational messages, `Plan`/`PlanStep`, versioned
+`InMemoryStateStore`, `MemoryStore`/`Provenance`, `DecisionRuntime`, `ContextBuilder`,
+and trace sinks. The game-specific offer/transaction protocol lives in `social.py`;
+bbagents has no generic multi-party negotiation/transaction primitive yet. These
+are serial in-memory transactions, not durable/distributed game-state recovery.
 
 Run with the deterministic reference policy, or let a local model propose
 persistent milestone plans. Both execute through the same world tools.
@@ -94,7 +143,7 @@ and requests replanning rather than running forever.
 
 Energy recovery requires the explicit `rest()` tool: 3 outdoors or 6 in a shelter.
 Observation never restores energy. Moving costs 1.2, gathering/crafting 2, and
-building 6, in addition to passive fatigue. The rule policy rests at 30 energy
+construction work 1.5 per action, in addition to passive fatigue. The rule policy rests at 30 energy
 until reaching 70, then resumes work. Local controllers choose legal actions from
 the current world. Observing depletion removes the resource location from memory.
 The most recent failure is retained separately from the recent-observation buffer.
@@ -153,7 +202,8 @@ eat/drink as needed, choose a known safe shelter if possible, and wait for night
 the map shows a z and the sidebar shows remaining ticks. Each tick restores
 2.5 energy and 1 HP outdoors, or 5 energy and 2 HP in shelter, capped at 100.
 Hunger, thirst, passive fatigue, and need damage pause while asleep. A shelter
-accommodates only one sleeper; preparation avoids occupied shelters and waking
+has one bed when built solo or two when built jointly, with one sleeper per bed;
+preparation avoids full shelters and waking
 or death releases capacity. Outdoor sleeping has no occupancy limit. Visible predators,
 attacks, or hunger/thirst reaching 80 interrupt sleep. Defense and urgent needs
 take priority; the saved plan resumes when safe.

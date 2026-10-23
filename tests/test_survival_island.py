@@ -46,7 +46,7 @@ def test_agents_make_progress_over_long_run() -> None:
     shelters = sum(tile.shelter_owner is not None for row in simulation.world.tiles for tile in row)
     assert gathered > 0
     assert shelters > 0
-    assert any(message.text.startswith("lake:") for message in simulation.messages)
+    assert simulation.trace.events_named("objective.changed")
 
 
 def test_survivors_live_beyond_original_failure_window() -> None:

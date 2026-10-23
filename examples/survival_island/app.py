@@ -123,6 +123,11 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
                     label = small.render("W" if predator.kind == "wolf" else "B", True, (255, 255, 255))
                     screen.blit(label, label.get_rect(center=rect.center))
 
+            for position in sim.social.active_sites:
+                x, y = position
+                pygame.draw.rect(screen, (235, 195, 100),
+                                 (x * tile_size + 3, y * tile_size + 3, tile_size - 6, tile_size - 6), 2)
+
             for index, agent in enumerate(sim.agents):
                 x, y = agent.position
                 center = (x * tile_size + tile_size // 2, y * tile_size + tile_size // 2)
@@ -151,10 +156,17 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
                 screen.blit(small.render(needs, True, (210, 210, 210)), (left, y))
                 y += 16
                 inventory = ", ".join(f"{name}:{amount}" for name, amount in agent.inventory.items() if amount) or "empty"
-                screen.blit(small.render(f"INT {agent.intelligence} · inventory: {inventory}", True, (180, 185, 190)), (left, y))
+                inventory_line = f"INT {agent.intelligence} · inventory: {inventory}"
+                if small.size(inventory_line)[0] > sidebar - 28:
+                    while inventory_line and small.size(inventory_line + "…")[0] > sidebar - 28:
+                        inventory_line = inventory_line[:-1]
+                    inventory_line += "…"
+                screen.blit(small.render(inventory_line, True, (180, 185, 190)), (left, y))
                 y += 16
                 plan = (agent.current_plan if agent.suspended_plan_key else
                         getattr(sim.policy, "model_plans", {}).get(agent.id, agent.current_plan))
+                if agent.social_project and not agent.suspended_plan_key:
+                    plan = sim.social.project_plans.get((agent.social_project, agent.id), plan)
                 ready = (f"Sleeping ({agent.sleep_remaining} ticks left)" if agent.sleep_remaining else
                          plan.next_ready_step().title if plan and plan.next_ready_step() else "complete")
                 screen.blit(small.render(f"plan v{plan.version if plan else 0}: {ready}", True, (180, 185, 190)), (left, y))
@@ -176,6 +188,22 @@ def run(*, model: str | None = None, endpoint: str = "http://localhost:11434/api
             if hovered:
                 details = [f"{hovered.id} ({hovered.kind}) · {hovered.behavior}",
                            f"HP {hovered.health:.0f}  hunger {hovered.hunger:.0f}  thirst {hovered.thirst:.0f}"]
+            else:
+                survivor = next((agent for agent in sim.agents if agent.alive
+                                 and agent.position == (mx // tile_size, my // tile_size)), None)
+                details = []
+                if survivor:
+                    traits = survivor.social_traits
+                    details = [f"{survivor.name}: generosity {traits.generosity}, cooperation {traits.cooperation}, caution {traits.caution}",
+                               f"Project: {survivor.social_project or 'none'} · Offers: {len(sim.social.pending(survivor))}"]
+                elif 0 <= mx // tile_size < sim.world.size and 0 <= my // tile_size < sim.world.size:
+                    tile = sim.world.tile((mx // tile_size, my // tile_size))
+                    if tile.shelter_owner:
+                        occupied = sum(agent.alive and bool(agent.sleep_remaining)
+                                       and agent.position == (mx // tile_size, my // tile_size) for agent in sim.agents)
+                        details = [f"Shelter: {tile.shelter_capacity} bed(s), {occupied} sleeping",
+                                   "Residents: " + ", ".join(sorted(tile.shelter_residents or {tile.shelter_owner}))]
+            if details:
                 labels = [small.render(line, True, (240, 240, 240)) for line in details]
                 width = max(label.get_width() for label in labels) + 12
                 tx = max(0, min(mx + 12, screen.get_width() - width))

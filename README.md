@@ -35,12 +35,11 @@ capability from the population.
 
 Seeing another survivor creates an encounter memory. Communication requires a
 previously encountered survivor who is currently within visibility—there is no
-global roster, telepathy, or automatic water broadcast. The reference policy can
-spend an action offering known water locations during an encounter, avoiding
-repeated offers for the same area. This simple contextual rule allows information
-sharing to arise from exploration; it is not a preassigned team role or a full
-negotiation/resource-trading system. Model context includes only encountered
-survivors; objective changes still obey the existing inference limits.
+global roster, telepathy, or automatic water broadcast. Each survivor has seeded
+**generosity, cooperation, and caution**. Its policy can ask questions, answer for
+free, quote a price, propose a trade, or invite a construction partner—and the
+other survivor can refuse. Model context includes only encountered survivors and
+voluntarily advertised supplies; inference limits still apply.
 
 ![Survival Island after 120 ticks with the reference policy](examples/survival_island/screenshot.png)
 
@@ -124,6 +123,72 @@ or coarse needs changes the key. Cached plans still use live action checks.
 The full trace streams to JSONL files. RAM retains only the last 200 ticks of
 events, capped at 30,000 events for unusually busy runs; old histories and
 postmortems are read from disk. The trace file-handle cache is also bounded.
+
+### Individual collaboration and exchanges
+
+Survival comes first. Otherwise, individual policies can use these tools during
+local encounters. Replies and consent each consume an action; nobody is forced
+to cooperate or wait idle for an answer.
+
+| Action | What happens |
+| --- | --- |
+| `communicate(id, message)` | Ask about water, food, wood, or shelter; answer from memory, decline, or quote a price. Survivors may also advertise their supplies. |
+| `trade(id, offer, request)` | Propose an item-for-item exchange; gifts are possible with an empty request. |
+| `collaborate(id, {"position": [x, y]})` | Invite a partner to a shared shelter project at a nearby observed grass tile. |
+| `respond_offer(offer_id, accept)` | Explicitly accept or reject the exact terms. |
+| `cancel_offer(offer_id)` | Withdraw your pending proposal. |
+| `work_project(project_id)` / `leave_project(project_id)` | Contribute materials/work, or leave previous contributions intact. |
+
+Offers expire after **32 ticks**, with at most four pending per participant.
+They do not reserve inventory: both inventories, consent, location, and life/sleep
+state are checked again at acceptance. Item exchange happens atomically on the
+simulation thread and cannot be accepted twice. Paid information stays hidden
+from the buyer's context until payment and disclosure succeed together. Information
+must come from the provider's memory; it may be stale, but fabrication is not
+supported. A refusal or cancelled/expired offer transfers nothing.
+
+Craft a `flask` with two wood. `collect_water()` fills an empty flask at water;
+the `water` inventory item represents a full flask and can be traded. `use_water()`
+reduces thirst by 50 and returns an empty flask. Trading a full flask transfers
+its container too. Policies use advertised supplies, not hidden peer inventories.
+
+**Construction now takes work over multiple ticks**, including solo construction:
+
+| Shelter | Wood | Work actions | Construction energy | Beds |
+| --- | ---: | ---: | ---: | ---: |
+| Solo | 10 | 4 | 6 total | 1 |
+| Shared | 14 | 6 | 9 total; 4.5 each if split evenly | 2 |
+
+Each builder contributes at most one work action per tick at the project site.
+With materials ready, two builders finish the shared shelter in three ticks versus
+four for a solo shelter. Both become residents. Materials and completed work remain
+if a partner leaves or dies; remaining members may invite a replacement, and an
+abandoned project can be adopted through `build("shelter")`. An individual may
+leave after 96 + cooperation ticks without progress, rather than waiting forever.
+Urgent needs, threats, and sleep pause work; they do not erase it. Sleeping capacity
+is enforced per bed, and a surviving resident keeps their home if a partner dies.
+
+The model may add one optional `{ "social": { "tool": ..., "arguments": ... } }`
+action to its goal/milestone response. It becomes a dependent `PlanStep` and passes
+the same world checks as reference-policy actions. Social proposals are not cached.
+They use ordinary planning requests, not a separate model call per interaction;
+new offers may request replanning but cannot bypass tick/time cooldowns.
+While an eligible model request is pending, the survivor keeps acting; local
+consent takes over when an offer has eight ticks left, so slow inference cannot
+leave it waiting forever.
+Hover over a survivor for traits/offers, or a shelter for its beds. Gold outlines
+mark construction sites. Offer decisions, payments, disclosure, contributions,
+departures, and completion appear in survivor traces and reports.
+
+**Framework usage and boundary:** `ActionRuntime` and `AuthorizationDecision`
+check actor-bound social actions; `ToolRegistry` exposes them; typed organizational
+messages carry data, not executable instructions. `Plan`/`PlanStep` track each
+builder's work, `InMemoryStateStore` provides version checks, and `MemoryStore`/
+`Provenance` retain social experience and externally supplied facts. `DecisionRuntime`
+and `ContextBuilder` validate and bound model proposals. bbagents does not yet have
+a generic multi-party offer/transaction protocol: this game's serial, in-memory
+implementation lives in `social.py`. It is not a distributed transaction service
+or a durable full-game recovery system.
 Plain headless `Simulation()` keeps its reference in-memory trace until a
 `ReportManager` enables journaling. Model inference still uses the GPU, so this
 reduces sustained work rather than guaranteeing silent operation.
@@ -173,7 +238,7 @@ Attacks cost 4 energy and have a three-tick cooldown, so a survivor cannot strik
 repeatedly before a bear responds. The rule policy prefers fleeing when outnumbered,
 injured, or facing a bear without two nearby allies.
 Energy falls each tick and with activity: moving costs 1.2, gathering or crafting
-costs 2, and building costs 6. Observation never restores energy. Explicit rest
+costs 2, and construction work costs 1.5 per action. Observation never restores energy. Explicit rest
 restores 3 outdoors or 6 in a shelter. The rule policy interrupts work at 30 energy
 and rests toward 70 before resuming, including while waiting for a model response.
 The rule policy prepares spears when it has wood from tick 200, attacks adjacent
@@ -234,8 +299,8 @@ flowchart LR
 The `sleep()` tool starts the activity once. The simulation advances it each tick
 without selecting more actions, restoring **2.5 energy and 1 HP outdoors**, or
 **5 energy and 2 HP in shelter**, per tick (capped at 100). Hunger and thirst
-freeze while asleep, and passive fatigue/need damage pauses. Only **one survivor
-can sleep per shelter**; night preparation avoids occupied shelters, and capacity
+freeze while asleep, and passive fatigue/need damage pauses. Each bed accommodates
+one sleeper (one bed for solo shelters, two for shared shelters); preparation avoids full shelters, and capacity
 is released on waking or death. Multiple survivors may sleep outdoors.
 Predators or externally changed hunger/thirst reaching 80 wake the agent
 early; a predator attack also interrupts sleep immediately. Sleeping survivors
