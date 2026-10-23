@@ -72,6 +72,7 @@ def _write_reports(simulation, directory: Path) -> None:
                          if not agent.alive else "No death analysis: this survivor is alive at this save.")
         lines = [f"# {agent.name} ({agent.id})", "", status, "",
                  f"Intelligence: {agent.intelligence}/100.", "",
+                 f"Current objective: {agent.objective}.", "",
                  f"Final needs: HP {agent.health:.1f}, hunger {agent.hunger:.1f}, "
                  f"thirst {agent.thirst:.1f}, energy {agent.energy:.1f}.",
                  f"Damage recorded in ticks {max(0, end - 199)}–{end}: {damage:.1f}.", "",
@@ -167,6 +168,8 @@ def summarize(agent_id, name, cause, death_tick, events, directory, *, model, en
                 "bears hit for 30 every 6 ticks. Shelters reduce incoming damage by 75%. "
                 "Survivors killing a wolf automatically recover 30 hunger and 10 thirst; "
                 "killing a bear recovers 50 hunger and 20 thirst, only for the killer. "
+                "Survivors are independent generalists with changing objectives, not assigned specialists. "
+                "They know only encountered survivors and can communicate only within local visibility. "
                 "Return a concise summary, likely_contributors, uncertainties, and evidence_ticks."),
         context=context, schema=PostmortemSchema(),
         validate=lambda value: all(tick in included_ticks for tick in value["evidence_ticks"]),

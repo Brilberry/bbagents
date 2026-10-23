@@ -25,6 +25,23 @@ a personal objective, a limited view of the world, remembered terrain and
 resources, and a message inbox. They gather wood and berries, drink from rivers or lakes,
 craft tools, and build shelters while their survival needs change over time.
 
+Survivors are **independent generalists**, not assigned builders, scouts, or food
+providers. They spawn apart with no knowledge of one another. Each chooses its own
+current priority from local knowledge and needs: find water, establish a home,
+stock food, make personal defenses/tools, then explore. Losing a shelter or running
+out of food changes that priority; emergencies and sleep still take precedence.
+Every survivor has the same tools, so losing one never removes a specialist's
+capability from the population.
+
+Seeing another survivor creates an encounter memory. Communication requires a
+previously encountered survivor who is currently within visibility—there is no
+global roster, telepathy, or automatic water broadcast. The reference policy can
+spend an action offering known water locations during an encounter, avoiding
+repeated offers for the same area. This simple contextual rule allows information
+sharing to arise from exploration; it is not a preassigned team role or a full
+negotiation/resource-trading system. Model context includes only encountered
+survivors; objective changes still obey the existing inference limits.
+
 ![Survival Island after 120 ticks with the reference policy](examples/survival_island/screenshot.png)
 
 ### How it works
@@ -177,7 +194,8 @@ Headless `Simulation.step()` also stops advancing after game over.
 
 Every **1,000 ticks**, another survivor spawns at a random walkable land tile on
 the island's edge. New arrivals have their own identity, tools, limited knowledge,
-plans, and memory. They begin by looking for shelter. Scroll the sidebar with the
+plans, and memory. They independently choose priorities from their own discoveries,
+just like the original survivors. Scroll the sidebar with the
 mouse wheel or Page Up / Page Down to inspect more than five survivors.
 
 The `claim_shelter()` tool lets a survivor take an unassigned shelter, one whose

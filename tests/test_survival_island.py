@@ -187,6 +187,9 @@ def test_claim_abandoned_shelter_and_reuse_owned_home():
     simulation = Simulation(predator_interval=None, lightning_probability=0)
     owner, claimant = simulation.agents[:2]
     claimant.objective = "Build a safe shelter"
+    water = next((x, y) for y, row in enumerate(simulation.world.tiles)
+                 for x, tile in enumerate(row) if tile.terrain.is_water)
+    claimant.known_tiles[water] = simulation.world.tile(water).terrain
     position = claimant.position
     simulation.world.tile(position).shelter_owner = owner.id
     owner.home = position

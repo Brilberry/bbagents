@@ -10,6 +10,18 @@ shorelines. Survivors can drink from a lake or an adjacent tile and share lake
 locations, giving them alternatives to relying only on the central river. River
 and lake water both work for drinking, communication, and predator water seeking.
 
+Survivors start apart as independent generalists with no knowledge of each other,
+not fixed team roles. Their priorities change with personal discoveries and needs:
+water, shelter, food reserves, personal defenses/tools, then exploration. All
+survivors can perform all tasks. New arrivals follow the same adaptive policy.
+Encounters create episodic memories. Messages require a discovered survivor who
+is currently within visibility; finding water does not broadcast to the population.
+A safe survivor can spend an action offering water information to a nearby contact,
+with duplicate offers for the same area suppressed. This is a local interaction
+rule, not assigned collaboration or a trading/negotiation system. Model context
+contains encountered survivors only; changed objectives still respect inference
+tick/time limits. Objective changes and encounters are included in survivor traces.
+
 Run with the deterministic reference policy, or let a local model propose
 persistent milestone plans. Both execute through the same world tools.
 

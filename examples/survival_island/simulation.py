@@ -114,6 +114,8 @@ class Survivor:
     death_cause: str | None = None
     decision_source: str = "rule"
     intelligence: int = 50
+    known_survivors: dict[str, Position] = field(default_factory=dict)
+    shared_water: set[tuple[str, Position]] = field(default_factory=set)
 
 
 class Island:
@@ -231,27 +233,20 @@ class Simulation:
         self.trace = IslandTrace(self)
         self._recorded_deaths: set[str] = set()
         self.checkpoints = InMemoryStateStore()
-        objectives = (
-            "Build a safe shelter",
-            "Secure a reliable water source",
-            "Stockpile food for the group",
-            "Explore and map the island",
-            "Develop tools and help the group",
-        )
         names = ("Ari", "Bo", "Cyra", "Dax", "Ena")
-        spawn = self._find_spawn()
         self.agents: list[Survivor] = []
+        land = [(x, y) for y, row in enumerate(self.world.tiles)
+                for x, tile in enumerate(row) if tile.terrain == Terrain.GRASS]
         for index in range(agents):
-            offset = (index % 3 - 1, index // 3)
-            position = (spawn[0] + offset[0], spawn[1] + offset[1])
-            if not self.world.passable(position):
-                position = spawn
+            separated = [pos for pos in land if all(self.distance(pos, other.position) >= 7
+                         for other in self.agents)]
+            position = self.random.choice(separated or land)
             self.agents.append(
                 Survivor(
                     id=f"agent-{index + 1}",
                     name=names[index % len(names)],
                     position=position,
-                    objective=objectives[index % len(objectives)],
+                    objective="Explore and survive independently",
                     intelligence=self.intelligence_random.randint(
                         85 if index == 0 else 5 if index == 1 else 20,
                         100 if index == 0 else 20 if index == 1 else 85),
@@ -261,6 +256,7 @@ class Simulation:
         self.tools = {agent.id: self._make_tools(agent) for agent in self.agents}
         for agent in self.agents:
             self.observe(agent)
+            self.policy._update_objective(agent)
             self.policy.replan(agent, "initial objective")
         self._record_states()
 
@@ -377,6 +373,7 @@ class Simulation:
             active_plan = model_plan if agent.decision_source == "model plan" else agent.current_plan
             self.trace.record("survivor.state", {"agent": agent.id, "name": agent.name,
                 "intelligence": agent.intelligence,
+                "objective": agent.objective, "known_survivors": dict(agent.known_survivors),
                 "health": agent.health, "hunger": agent.hunger, "thirst": agent.thirst,
                 "energy": agent.energy, "position": agent.position, "inventory": dict(agent.inventory),
                 "home": agent.home, "sleep_remaining": agent.sleep_remaining,
@@ -520,11 +517,12 @@ class Simulation:
         name = names[(number - 6) % len(names)]
         if number > 12:
             name += str(number)
-        agent = Survivor(f"agent-{number}", name, self.random.choice(positions), "Build a safe shelter",
+        agent = Survivor(f"agent-{number}", name, self.random.choice(positions), "Explore and survive independently",
                          intelligence=self.intelligence_random.randint(5, 100))
         self.agents.append(agent)
         self.tools[agent.id] = self._make_tools(agent)
         self.observe(agent)
+        self.policy._update_objective(agent)
         self.policy.replan(agent, "new arrival")
         self.event_log.appendleft(f"Tick {self.tick}: {name} washed ashore")
         self.trace.record("survivor.arrived", {"agent": agent.id, "position": agent.position, "tick": self.tick})
@@ -834,11 +832,8 @@ class Simulation:
 
     def observe(self, agent: Survivor) -> Observation:
         seen: list[dict[str, Any]] = []
-        discovered_lake = False
         for position in self.world.positions_within(agent.position, agent.visibility):
             tile = self.world.tile(position)
-            is_new_lake = tile.terrain.is_water and position not in agent.known_tiles
-            discovered_lake = discovered_lake or is_new_lake
             agent.known_tiles[position] = tile.terrain
             for resource, positions in agent.known_resources.items():
                 if tile.resources[resource] <= 0:
@@ -847,13 +842,10 @@ class Simulation:
                 if amount > 0:
                     agent.known_resources.setdefault(resource, set()).add(position)
             seen.append({"position": position, "terrain": tile.terrain.value, "resources": dict(tile.resources), "shelter": tile.shelter_owner})
-        nearby = [other.id for other in self.agents if other.id != agent.id and other.alive and self.distance(agent.position, other.position) <= agent.visibility]
-        if discovered_lake:
-            lake = self.policy.nearest_known_water(agent)
-            if lake is not None:
-                for other in self.agents:
-                    if other.id != agent.id and other.alive:
-                        self.communicate(agent, other.id, f"{self.world.tile(lake).terrain.value}:{lake[0]},{lake[1]}")
+        contacts = self.nearby_survivors(agent)
+        for other in contacts:
+            self._remember_survivor(agent, other)
+        nearby = [other.id for other in contacts]
         threats = [{"id": item.id, "kind": item.kind, "position": item.position, "pack_id": item.pack_id,
                     "health": item.health, "hunger": item.hunger, "thirst": item.thirst,
                     "behavior": item.behavior} for item in self.visible_predators(agent)]
@@ -893,8 +885,8 @@ class Simulation:
         if any(self.world.tile(pos).terrain.is_water
                for pos in self.world.positions_within(agent.position, 1)):
             calls.append(ToolCall("drink"))
-        for other in self.agents:
-            if other.alive and other.id != agent.id:
+        for other in self.nearby_survivors(agent):
+            if other.id in agent.known_survivors:
                 calls.append(ToolCall("communicate", {"agent_id": other.id, "message": ""}))
         return calls
 
@@ -983,15 +975,33 @@ class Simulation:
         return Observation("drink", f"drank from {self.world.tile(water).terrain.value}", {"thirst": agent.thirst})
 
     def communicate(self, sender: Survivor, agent_id: str, message: str) -> Observation:
-        recipient = next((agent for agent in self.agents if agent.id == agent_id and agent.alive), None)
+        recipient = next((agent for agent in self.nearby_survivors(sender)
+                          if agent.id == agent_id and agent.id in sender.known_survivors), None)
         if recipient is None:
-            raise ValueError(f"unknown recipient: {agent_id}")
+            raise ValueError(f"recipient must be discovered and within visibility: {agent_id}")
+        self._remember_survivor(recipient, sender)
+        water = self.policy.nearest_known_water(sender)
+        if water is not None and message == f"{self.world.tile(water).terrain.value}:{water[0]},{water[1]}":
+            sender.shared_water.add((recipient.id, water))
         envelope = Message(sender.id, recipient.id, message[:240], self.tick)
         recipient.inbox.append(envelope)
         self.messages.appendleft(envelope)
         self.trace.record("message.sent", {"agent": sender.id, "recipient": recipient.id,
                                            "message": envelope.text})
         return Observation("communicate", f"told {recipient.name}: {message}", {"recipient": recipient.id})
+
+    def nearby_survivors(self, agent: Survivor) -> list[Survivor]:
+        return [other for other in self.agents if other.id != agent.id and other.alive
+                and self.distance(agent.position, other.position) <= agent.visibility]
+
+    def _remember_survivor(self, agent: Survivor, other: Survivor) -> None:
+        if other.id not in agent.known_survivors:
+            self.trace.record("survivor.discovered", {"agent": agent.id, "other": other.id,
+                                                      "position": other.position})
+            agent.memory.remember(MemoryRecord(f"Met {other.name} at {other.position}",
+                source="encounter", metadata={"survivor": other.id, "position": other.position,
+                                             "tick": self.tick}))
+        agent.known_survivors[other.id] = other.position
 
     @staticmethod
     def distance(a: Position, b: Position) -> int:
@@ -1004,14 +1014,55 @@ class SurvivalPolicy:
     def __init__(self, simulation: Simulation) -> None:
         self.sim = simulation
 
+    def _update_objective(self, agent: Survivor) -> None:
+        if agent.suspended_plan_key or agent.resume_pending or self._emergency(agent):
+            return
+        if self.nearest_known_water(agent) is None:
+            objective = "Secure a reliable water source"
+        elif agent.home is None:
+            objective = "Build a safe shelter"
+        elif agent.inventory["berries"] == 0 or (agent.objective.startswith("Stockpile")
+                                                  and agent.inventory["berries"] < 6):
+            objective = "Stockpile food for myself"
+        elif not agent.inventory["spear"]:
+            objective = "Prepare personal defenses"
+        elif not agent.inventory["axe"]:
+            objective = "Develop useful tools"
+        else:
+            objective = "Explore and map the island"
+        if objective != agent.objective:
+            previous = agent.objective
+            agent.objective = objective
+            self.sim.trace.record("objective.changed", {"agent": agent.id, "previous": previous,
+                                                        "objective": objective})
+            if agent.current_plan is not None:
+                self.replan(agent, "priorities changed with local discoveries and needs")
+
+    def _share_useful_water(self, agent: Survivor) -> ToolCall | None:
+        water = self.nearest_known_water(agent)
+        if water is not None:
+            for other in self.sim.nearby_survivors(agent):
+                already_shared = any(recipient == other.id and self.sim.distance(position, water) <= 4
+                                     for recipient, position in agent.shared_water)
+                if other.id in agent.known_survivors and not already_shared:
+                    return ToolCall("communicate", {"agent_id": other.id,
+                        "message": f"{agent.known_tiles[water].value}:{water[0]},{water[1]}"})
+        return None
+
     def decide(self, agent: Survivor) -> ToolCall:
+        self.sim.observe(agent)
         self._read_messages(agent)
+        self._update_objective(agent)
         if agent.home is None and agent.current_plan and agent.current_plan.goal == "Maintain existing shelter":
             self.replan(agent, "shelter destroyed")
         defense = self.defend(agent)
         if defense:
             return defense
         emergency = self._emergency(agent)
+        if not emergency and not agent.suspended_plan_key and not agent.resume_pending:
+            share = self._share_useful_water(agent)
+            if share:
+                return share
         if (not emergency and not agent.suspended_plan_key and agent.home is None
                 and agent.objective.startswith("Build")
                 and agent.current_plan and agent.current_plan.goal != "Claim available shelter"
@@ -1110,10 +1161,17 @@ class SurvivalPolicy:
                      PlanStep("claim-home", "Claim shelter", depends_on=["reach-empty-shelter"])]
             goal = "Claim available shelter"
         elif agent.objective.startswith("Secure"):
-            steps = [PlanStep("locate-water", "Locate water"), PlanStep("reach-water", "Reach water", depends_on=["locate-water"]), PlanStep("share-water", "Share water location", depends_on=["reach-water"])]
+            steps = [PlanStep("locate-water", "Locate water"),
+                     PlanStep("reach-water", "Reach water", depends_on=["locate-water"]),
+                     PlanStep("drink", "Drink if needed", depends_on=["reach-water"])]
             goal = agent.objective
         elif agent.objective.startswith("Stockpile"):
             steps = [PlanStep("locate-food", "Locate food"), PlanStep("collect-food", "Collect six berries", depends_on=["locate-food"])]
+            goal = agent.objective
+        elif agent.objective.startswith("Prepare personal"):
+            steps = [PlanStep("locate-wood", "Find wood"),
+                     PlanStep("collect-wood", "Gather three wood", depends_on=["locate-wood"]),
+                     PlanStep("craft-spear", "Craft personal spear", depends_on=["collect-wood"])]
             goal = agent.objective
         elif agent.objective.startswith("Explore"):
             steps = [PlanStep("explore", "Explore unknown territory")]
@@ -1210,12 +1268,14 @@ class SurvivalPolicy:
                 return self._collect(agent, "berries", 1)
             return ToolCall("eat", {"item": "berries"}), False
         if sid == "collect-wood":
-            required = 10 if not agent.objective.startswith("Develop") else 3
+            required = 3 if agent.objective.startswith(("Develop", "Prepare personal")) else 10
             return self._collect(agent, "wood", required)
         if sid == "collect-stone":
             return self._collect(agent, "stone", 1)
         if sid == "craft-axe":
             return ToolCall("craft", {"item": "axe"}), agent.inventory["axe"] > 0
+        if sid == "craft-spear":
+            return ToolCall("craft", {"item": "spear"}), agent.inventory["spear"] > 0
         if sid == "find-site":
             if self.sim.world.tile(agent.position).terrain == Terrain.GRASS and self.sim.world.tile(agent.position).shelter_owner is None:
                 return ToolCall("observe_surroundings"), True
@@ -1225,7 +1285,8 @@ class SurvivalPolicy:
             return ToolCall("build", {"structure": "shelter"}), self.sim.world.tile(agent.position).shelter_owner == agent.id
         if sid == "share-water":
             water = self.nearest_known_water(agent)
-            recipient = next((other for other in self.sim.agents if other.id != agent.id and other.alive), None)
+            recipient = next((other for other in self.sim.nearby_survivors(agent)
+                              if other.id in agent.known_survivors), None)
             if water is None or recipient is None:
                 return ToolCall("observe_surroundings"), True
             if step.evidence:

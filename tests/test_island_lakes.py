@@ -56,6 +56,9 @@ def test_survivors_drink_from_each_lake_and_share_lake_locations():
         assert any(call.tool_name == "drink" for call in simulation.available_actions(agent))
         assert "lake" in simulation.drink(agent).content
         assert agent.thirst < 70
+        share = simulation.policy.decide(agent)
+        assert share.tool_name == "communicate"
+        simulation.tools[agent.id].execute(share)
         simulation.policy._read_messages(friend)
         assert any(terrain == Terrain.LAKE for terrain in friend.known_tiles.values())
     assert any(message.text.startswith("lake:") for message in simulation.messages)
@@ -74,6 +77,9 @@ def test_river_is_drinkable_shared_and_used_by_predator_water_navigation():
     assert simulation.policy.nearest_known_water(agent) in river
     assert any(call.tool_name == "drink" for call in simulation.available_actions(agent))
     assert "river" in simulation.drink(agent).content
+    share = simulation.policy.decide(agent)
+    assert share.tool_name == "communicate"
+    simulation.tools[agent.id].execute(share)
     simulation.policy._read_messages(friend)
     assert any(terrain == Terrain.RIVER for terrain in friend.known_tiles.values())
     assert any(message.text.startswith("river:") for message in simulation.messages)
