@@ -12,8 +12,16 @@ Companion code for *Agentic AI: Architecture, Theory, and Practice*.
 
 Requires Python 3.11+.
 
+Install from PyPI:
+
 ```sh
-pip install -e '.[dev]'
+python -m pip install bbagents
+```
+
+For development, install from a repository checkout and run the tests:
+
+```sh
+python -m pip install -e '.[dev]'
 pytest
 ```
 
