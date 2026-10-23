@@ -13,10 +13,13 @@ from bbagents import Action, ActionRuntime, AuthorizationDecision, Observation, 
 from bbagents.memory import MemoryRecord
 from bbagents.persistence import InMemoryStateStore
 from bbagents.provenance import Provenance
+from .progression import RULES, NUTRITION, missing_prerequisites
 
 
-ITEMS = {"wood", "stone", "berries", "ration", "spear", "axe", "flask", "water"}
-TOPICS = {"water", "food", "wood", "shelter"}
+ITEMS = {"wood", "stone", "berries", "ration", "spear", "axe", "flask", "water", "fish", "fishing_rod", "bow", "meat"}
+ITEMS |= {"vegetables", "cooked_fish", "cooked_meat", "knife", "hide", "leather", "leather_garment"}
+ITEMS.add("reservoir")
+TOPICS = {"water", "food", "wood", "shelter"} | set(RULES)
 SOCIAL_TOOLS = {"trade", "collaborate", "respond_offer", "cancel_offer", "work_project",
                 "leave_project", "collect_water", "use_water", "communicate"}
 SHAPES = {"trade": ({"agent_id", "offer", "request"}, set()),
@@ -170,11 +173,23 @@ class SocialWorld:
         return Observation(kind, f"proposed {kind} {identity} to {other.name}", {"offer_id": identity})
 
     def do_trade(self, actor, agent_id, offer, request):
+        if not actor.behavior.get("trading", {}).get("enabled", True):
+            raise ValueError("trading disabled by survivor policy")
+        if actor.behavior:
+            for group in (tuple(NUTRITION), ("water",)):
+                if any(offer.get(item, 0) for item in group):
+                    remaining = sum(actor.inventory[item] - offer.get(item, 0) + request.get(item, 0) for item in group)
+                    if remaining < actor.behavior["trading"]["reserve"]:
+                        raise ValueError("trade would spend reserved supplies")
         return self.offer(actor, agent_id, "trade", offer, request)
 
     def information(self, actor, topic):
         if topic not in TOPICS:
             raise ValueError("unsupported information topic")
+        if topic in RULES:
+            if topic not in actor.learned_skills:
+                raise ValueError(f"survivor has not learned {topic}")
+            return {"topic": topic, "skill": topic}
         if topic == "water":
             position = self.sim.policy.nearest_known_water(actor)
         elif topic == "shelter":
@@ -188,6 +203,14 @@ class SocialWorld:
         return {"topic": topic, "position": list(position), "terrain": actor.known_tiles[position].value}
 
     def learn(self, actor, information, sender):
+        if information["topic"] in RULES:
+            if missing_prerequisites(actor, information["topic"]):
+                self.sim.trace.record("skill.lesson_deferred", {"agent": actor.id,
+                    "skill": information["topic"], "sender": sender,
+                    "missing": missing_prerequisites(actor, information["topic"])})
+                return
+            self.sim.learn_skill(actor, information["topic"], sender)
+            return
         from .simulation import Terrain
         position = tuple(information["position"])
         actor.known_tiles[position] = Terrain(information["terrain"])
@@ -282,9 +305,22 @@ class SocialWorld:
             self.offers.save(offer_id, offer, expected_version=snapshot.version)
             self._record("social.offer_rejected", [actor, sender], offer=offer_id)
             return Observation("respond_offer", f"rejected {offer_id}")
+        if offer["kind"] == "information" and offer["information"]["topic"] in RULES:
+            missing = missing_prerequisites(actor, offer["information"]["topic"])
+            if missing:
+                raise ValueError("cannot buy a lesson before learning its prerequisites")
         for owner, items in ((sender, offer["give"]), (actor, offer["want"])):
             if any(owner.inventory[item] < amount for item, amount in items.items()):
                 raise ValueError("inventory changed; trade cannot execute")
+            if owner.behavior and offer["kind"] != "collaborate":
+                if not owner.behavior["trading"]["enabled"]:
+                    raise ValueError("participant trading disabled")
+                received = offer["want"] if owner is sender else offer["give"]
+                for group in (tuple(NUTRITION), ("water",)):
+                    if any(items.get(item, 0) for item in group):
+                        total = sum(owner.inventory[item] - items.get(item, 0) + received.get(item, 0) for item in group)
+                        if total < owner.behavior["trading"]["reserve"]:
+                            raise ValueError("inventory changed; reserved supplies would be spent")
         site, existing = None, None
         if offer["kind"] == "collaborate":
             site = self._site(actor, {"position": offer["site"]})
@@ -303,6 +339,9 @@ class SocialWorld:
             for item, amount in items.items():
                 giver.inventory[item] -= amount
                 receiver.inventory[item] += amount
+        for participant in (sender, actor):
+            if participant.inventory["leather_garment"] == 0:
+                participant.leather_equipped = False
         if offer["kind"] == "information":
             self.learn(actor, offer["information"], sender.id)
         elif site is not None:
@@ -407,7 +446,7 @@ class SocialWorld:
             project["status"] = "completed"
         self.projects.save(project_id, project, expected_version=snapshot.version)
         actor.inventory["wood"] -= wood
-        actor.energy -= 1.5 if work else 0
+        actor.energy -= (1.5 * (1.5 - actor.strength / 10)) if work else 0
         plan = self.project_plans.get((project_id, actor.id))
         if plan:
             plan.steps[0].status = StepStatus.DONE
@@ -490,16 +529,30 @@ class SocialWorld:
     def policy_response(self, actor, offer):
         """Individual preferences return framework authorization decisions, not effects."""
         traits = actor.social_traits
+        if (offer["kind"] == "information" and offer["information"]["topic"] in RULES
+                and missing_prerequisites(actor, offer["information"]["topic"])):
+            return AuthorizationDecision.deny("missing prerequisite knowledge")
+        preferences = actor.behavior.get("preferences", {})
+        trading = actor.behavior.get("trading", {})
+        if offer["kind"] in {"trade", "information"} and not trading.get("enabled", True):
+            return AuthorizationDecision.deny("trading disabled")
         if traits.caution >= 60 and any(result.record.metadata.get("survivor") == offer["sender"]
                 for result in actor.memory.retrieve("project.left", limit=4)):
             return AuthorizationDecision.deny("past partner abandonment makes me cautious")
         if offer["kind"] == "collaborate":
+            if preferences.get("shelter") == "solo":
+                return AuthorizationDecision.deny("prefers a solo shelter")
             if (traits.cooperation < 35 or actor.social_project or
                     (actor.home is not None and traits.generosity < 80)):
                 return AuthorizationDecision.deny("not willing to join this project")
             return AuthorizationDecision.allow("shared construction fits my current priorities")
         for item, quantity in offer["want"].items():
             remaining = actor.inventory[item] - quantity
+            if actor.behavior and item in set(NUTRITION) | {"water"}:
+                group = ("water",) if item == "water" else tuple(NUTRITION)
+                total = sum(actor.inventory[name] - offer["want"].get(name, 0) + offer["give"].get(name, 0) for name in group)
+                if total < trading.get("reserve", 2):
+                    return AuthorizationDecision.deny("exchange would spend reserved supplies")
             if remaining < 0 or (item == "berries" and remaining < (0 if traits.generosity > 75 else 2)):
                 return AuthorizationDecision.deny("I cannot afford this without risking my reserves")
             if item == "water" and remaining < 1 and actor.thirst > 40:
@@ -541,9 +594,10 @@ class SocialWorld:
             topic = request["topic"]
             try:
                 self.information(actor, topic)
-                if actor.social_traits.generosity < 20 and actor.social_traits.cooperation < 20:
+                knowledge = actor.behavior.get("preferences", {}).get("knowledge")
+                if knowledge == "private" or (knowledge is None and actor.social_traits.generosity < 20 and actor.social_traits.cooperation < 20):
                     message = {"kind": "decline", "topic": topic}
-                elif actor.social_traits.generosity >= 60:
+                elif knowledge == "share" or (knowledge is None and actor.social_traits.generosity >= 60):
                     message = {"kind": "information", "topic": topic}
                 else:
                     message = {"kind": "quote_info", "topic": topic, "price": {"berries": 1}}
@@ -595,16 +649,33 @@ class SocialWorld:
             report = actor.peer_reports.get(identity)
             if report and self.sim.tick - report["tick"] < 64:
                 inventory = report["inventory"]
-                if actor.thirst >= 35 and not actor.inventory["water"] and actor.inventory["berries"] >= 4 and inventory.get("water", 0):
+                can_trade = actor.behavior.get("trading", {}).get("enabled", True)
+                reserve = actor.behavior.get("trading", {}).get("reserve", 2)
+                if can_trade and actor.thirst >= 35 and not actor.inventory["water"] and actor.inventory["berries"] >= reserve + 2 and inventory.get("water", 0):
                     return ToolCall("trade", {"agent_id": identity, "offer": {"berries": 2}, "request": {"water": 1}})
-                if actor.hunger >= 35 and actor.inventory["berries"] < 2 and actor.inventory["water"] >= 2 and inventory.get("berries", 0) >= 2:
+                if can_trade and actor.hunger >= 35 and actor.inventory["berries"] < 2 and actor.inventory["water"] > reserve and inventory.get("berries", 0) >= 2:
                     return ToolCall("trade", {"agent_id": identity, "offer": {"water": 1}, "request": {"berries": 2}})
-                if (actor.home is None and actor.social_traits.cooperation >= 35 and report["needs_home"]
+                if (actor.home is None and actor.behavior.get("preferences", {}).get("shelter") != "solo" and actor.social_traits.cooperation >= (20 if actor.behavior.get("preferences", {}).get("shelter") == "shared" else 35) and report["needs_home"]
                         and self.sim.world.tile(actor.position).terrain.value == "grass"
                         and self.sim.world.tile(actor.position).shelter_owner is None
                         and not self.project_at(actor.position)):
                     return ToolCall("collaborate", {"agent_id": identity, "project": {"position": list(actor.position)}})
-            for topic in ("water", "food", "wood"):
+            for topic in ("water", "food", "wood", "fishing", "axe", "spear", "bow", "hunting",
+                          "gardening", "fire", "cooking", "skinning", "leatherworking", "reservoir"):
+                if topic in RULES and missing_prerequisites(actor, topic):
+                    continue
+                if topic in {"gardening", "fire", "cooking", "reservoir"} and not self.sim.home_is_valid(actor):
+                    continue
+                if topic in {"skinning", "leatherworking"} and not actor.hunting_kills:
+                    continue
+                if topic in {"bow", "hunting"} and not actor.seen_wildlife:
+                    continue
+                if topic == "fishing" and not any(terrain.value == "lake" for terrain in actor.known_tiles.values()):
+                    continue
+                if topic == "axe" and not (actor.wood_gathered >= 8 and actor.home is None):
+                    continue
+                if topic == "spear" and self.sim.tick - actor.last_threat_tick > 120:
+                    continue
                 try:
                     self.information(actor, topic)
                 except ValueError:

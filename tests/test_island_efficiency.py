@@ -1,5 +1,3 @@
-import json
-
 from bbagents import StepStatus
 from examples.survival_island import Simulation
 from examples.survival_island.inference import InferenceGate
@@ -10,6 +8,7 @@ from examples.survival_island.reporting import ReportManager
 def test_one_model_plan_drives_many_tool_actions():
     simulation = Simulation(agents=1, predator_interval=None, lightning_probability=0)
     agent = simulation.agents[0]
+    simulation.learn_skill(agent, "spear", "test teacher")
     simulation.world.tile(agent.position).resources["wood"] = 20
     calls = []
 
@@ -106,7 +105,7 @@ def test_streamed_trace_keeps_recent_memory_and_complete_disk_history(tmp_path):
     assert len(simulation.trace.events) <= 200
     assert min(event.attributes["recorded_tick"] for event in simulation.trace.events) == 801
     manager.close()
-    rows = [json.loads(line) for line in (tmp_path / "agent-1.jsonl").read_text().splitlines()]
+    rows = list(simulation.trace.iter_rows("agent-1"))
     assert any(row.get("tick") == 1 for row in rows)
     assert any(row.get("tick") == 1000 for row in rows)
     assert len(rows) > len(simulation.trace.events)
@@ -132,7 +131,7 @@ def test_late_postmortem_uses_disk_history_after_memory_eviction(tmp_path):
     assert len(requests) == 1
     assert "survivor.died" in requests[0].context.content
     assert '"event": "heartbeat"' not in requests[0].context.content
-    assert "Starvation at tick 1" in (tmp_path / "agent-1.md").read_text()
+    assert "Starvation at tick 1" in (tmp_path / "survival-report.md").read_text()
 
 
 def test_survival_emergency_pauses_instead_of_losing_model_plan():
@@ -147,11 +146,11 @@ def test_survival_emergency_pauses_instead_of_losing_model_plan():
         simulation.step()
         plan = policy.model_plans[agent.id]
         agent.hunger = 70
-        agent.inventory["berries"] = 3
+        agent.inventory["berries"] = 6
         simulation.step()
         assert agent.decision_source == "rule"
         assert policy.model_plans[agent.id] is plan
-        for _ in range(5):
+        for _ in range(10):
             simulation.step()
         assert plan.steps[0].status == StepStatus.PENDING
         assert len(plan.steps[0].evidence) >= 2

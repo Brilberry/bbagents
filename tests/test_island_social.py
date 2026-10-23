@@ -13,8 +13,7 @@ from examples.survival_island.simulation import Terrain
 
 
 def community(count=3):
-    sim = Simulation(agents=count, predator_interval=None, lightning_probability=0,
-                     survivor_interval=None)
+    sim = Simulation(agents=count, predator_interval=None, lightning_probability=0)
     for agent in sim.agents:
         agent.position = (10, 10)
         agent.inventory.clear()

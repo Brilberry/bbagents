@@ -6,7 +6,7 @@ from examples.survival_island import Simulation
 
 
 def test_last_death_ends_run_and_future_steps_do_nothing():
-    simulation = Simulation(agents=1, predator_interval=250, survivor_interval=1000)
+    simulation = Simulation(agents=1, predator_interval=250)
     agent = simulation.agents[0]
     agent.health, agent.hunger = 1, 95
     simulation.step()
@@ -60,5 +60,5 @@ def test_renderer_freezes_final_state_and_saves_reports(monkeypatch, tmp_path, c
     app.run(report_dir=str(tmp_path), postmortems=False)
     assert simulation.tick == simulation.ended_tick == 1
     assert "Game over at tick 1" in capsys.readouterr().out
-    assert "Died at tick 1" in (tmp_path / "agent-1.md").read_text()
-    assert "simulation.ended" in (tmp_path / "trace.jsonl").read_text()
+    assert "Died at tick 1" in (tmp_path / "survival-report.md").read_text()
+    assert "simulation.ended" in (tmp_path / "survival-report.md").read_text()

@@ -36,11 +36,19 @@ def test_every_survivor_can_change_priorities_without_teammates():
         assert agent.objective == "Stockpile food for myself"
         agent.inventory["berries"] = 6
         simulation.policy._update_objective(agent)
+        assert agent.objective.startswith("Explore")
+        simulation.learn_skill(agent, "spear", "test teacher")
+        agent.last_threat_tick = simulation.tick
+        simulation.policy._update_objective(agent)
         assert agent.objective == "Prepare personal defenses"
         agent.inventory["spear"] = 1
+        agent.home = None
+        agent.wood_gathered = 8
+        simulation.learn_skill(agent, "axe", "test teacher")
         simulation.policy._update_objective(agent)
         assert agent.objective.startswith("Develop")
         agent.inventory["axe"] = 1
+        agent.home = agent.position
         simulation.policy._update_objective(agent)
         assert agent.objective.startswith("Explore")
         agent.home = None
@@ -87,12 +95,12 @@ def test_model_context_contains_only_encountered_survivors():
 
 
 def test_a_lone_generalist_survives_and_builds_its_own_home():
-    simulation = Simulation(agents=1, predator_interval=None, survivor_interval=None,
+    simulation = Simulation(agents=1, predator_interval=None,
                             lightning_probability=0)
     for _ in range(1000):
         simulation.step()
     agent = simulation.agents[0]
     assert agent.alive
     assert agent.home is not None
-    assert agent.inventory["spear"] == 1
+    assert agent.inventory["spear"] == 0  # No predators: no mandatory weapon progression.
     assert not agent.known_survivors

@@ -8,7 +8,6 @@ def test_intelligence_is_seeded_diverse_and_given_to_new_arrivals():
     assert scores == [agent.intelligence for agent in second.agents]
     assert max(scores) >= 85
     assert min(scores) <= 20
-    first._spawn_survivor()
     assert 5 <= first.agents[-1].intelligence <= 100
     assert first.trace.events_named("survivor.state")[0].attributes["intelligence"] == scores[0]
 
@@ -25,10 +24,7 @@ def test_initial_planning_is_staggered_and_new_arrivals_wait():
         assert policy._eligible(simulation.agents[0])
         assert not policy._eligible(simulation.agents[1])
         simulation.tick = 1000
-        simulation._spawn_survivor()
-        newcomer = simulation.agents[-1]
-        assert not policy._eligible(newcomer)
-        assert 1005 <= policy.next_request_tick[newcomer.id] <= 1010
+        assert len(simulation.agents) == 5
     finally:
         policy.close()
 

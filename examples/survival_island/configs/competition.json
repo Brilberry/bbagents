@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "ruleset_version": "island-v1",
+  "map_name": "balanced-island",
+  "starting_season": "spring",
+  "team_points": 100,
+  "survivor_count": 5,
+  "max_ticks": 10000,
+  "seeds": [17, 42, 109],
+  "decision_mode": "rules",
+  "scoring": "team-survival-v1"
+}

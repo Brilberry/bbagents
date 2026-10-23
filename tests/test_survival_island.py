@@ -98,6 +98,7 @@ def test_survivor_can_craft_spear_and_defeat_predator():
     simulation = Simulation()
     agent = simulation.agents[0]
     agent.inventory["wood"] = 3
+    simulation.learn_skill(agent, "spear", "test teacher")
     simulation.tools[agent.id].execute(ToolCall("craft", {"item": "spear"}))
     wolf = Predator("wolf-test", "wolf", agent.position, 45)
     simulation.predators.append(wolf)
@@ -140,6 +141,7 @@ def test_attack_cooldown_and_solo_bear_wolf_encounter():
     from examples.survival_island.simulation import Predator
 
     simulation = Simulation(agents=1, predator_interval=None, lightning_probability=0)
+    simulation.wildlife.animals.clear()  # Combat fixture: no alternative prey.
     agent = simulation.agents[0]
     agent.inventory["spear"] = 1
     bear = Predator("bear", "bear", agent.position, 150)
@@ -162,23 +164,18 @@ def test_attack_cooldown_and_solo_bear_wolf_encounter():
     assert bear.alive
 
 
-def test_new_survivors_arrive_at_1000_tick_intervals_with_tools():
+def test_no_new_survivors_arrive_at_1000_tick_intervals():
     simulation = Simulation(predator_interval=None, lightning_probability=0)
     simulation.tick = 998
     simulation.step()
     assert len(simulation.agents) == 5
     simulation.step()
-    newcomer = simulation.agents[-1]
-    assert len(simulation.agents) == 6
-    assert newcomer.id in simulation.tools
-    assert newcomer.current_plan is not None
-    assert len(newcomer.known_tiles) < simulation.world.size ** 2
-    spawn = simulation.trace.events_named("survivor.arrived")[-1].attributes["position"]
-    assert 0 in spawn or simulation.world.size - 1 in spawn
+    assert len(simulation.agents) == 5
+    assert not simulation.trace.events_named("survivor.arrived")
     simulation.tick = 1999
     simulation.step()
-    assert len(simulation.agents) == 7
-    assert len({agent.id for agent in simulation.agents}) == 7
+    assert len(simulation.agents) == 5
+    assert len({agent.id for agent in simulation.agents}) == 5
 
 
 def test_claim_abandoned_shelter_and_reuse_owned_home():
@@ -254,10 +251,11 @@ def test_flee_rest_and_shelter_defense():
         other.alive = False
     simulation.tick = 4
     simulation._update_predators()
-    assert agent.health == 98.25  # shelter reduces the wolf's 7 damage to 1.75
+    assert agent.health == 100  # Intact shelter blocks attacks entirely.
     wolf.health = 0
+    agent.health = 90
     simulation.rest(agent)
-    assert agent.health > 98.25
+    assert agent.health > 90
 
 
 def test_wolf_pack_shares_target_while_bear_hunts_independently():
@@ -290,6 +288,7 @@ def test_three_adjacent_wolves_deal_less_combined_damage_than_one_bear():
     from examples.survival_island.simulation import Predator
 
     simulation = Simulation(predator_interval=None)
+    simulation.wildlife.animals.clear()  # Combat fixture: no alternative prey.
     agent = simulation.agents[0]
     for other in simulation.agents[1:]:
         other.alive = False

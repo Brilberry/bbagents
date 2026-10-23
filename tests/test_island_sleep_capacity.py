@@ -16,6 +16,10 @@ def test_only_one_sleeper_per_shelter_and_waking_releases_capacity():
         simulation.sleep(second)
     assert second.sleep_remaining == 0
     simulation._wake(first, "predator", interrupted=True)
+    with pytest.raises(ValueError, match="private"):
+        simulation.sleep(second)
+    simulation.world.tile(first.position).shelter_capacity = 2
+    first.home = first.position
     simulation.sleep(second)
     assert second.sleep_remaining == 12
 
@@ -26,6 +30,7 @@ def test_shelter_capacity_is_released_on_completion_or_death(ending):
     first, second = simulation.agents
     second.position = first.position
     simulation.world.tile(first.position).shelter_owner = first.id
+    first.home = first.position
     simulation.sleep(first)
     if ending == "completed":
         for _ in range(12):
@@ -33,6 +38,9 @@ def test_shelter_capacity_is_released_on_completion_or_death(ending):
     else:
         first.alive = False
         simulation._wake(first, "death", interrupted=True)
+        simulation.claim_shelter(second)
+    if ending == "completed":
+        simulation.world.tile(first.position).shelter_capacity = 2
     simulation.sleep(second)
     assert second.sleep_remaining == 12
 
@@ -73,6 +81,7 @@ def test_night_policy_avoids_occupied_shelter_and_handles_late_occupancy():
     simulation = Simulation(agents=2, predator_interval=None, lightning_probability=0)
     first, second = simulation.agents
     first.position = second.position = (10, 10)
+    first.home = first.position
     for x, y in ((10, 10), (11, 10), (9, 10), (10, 11), (10, 9)):
         simulation.world.tile((x, y)).terrain = Terrain.GRASS
     simulation.world.tile(first.position).shelter_owner = first.id

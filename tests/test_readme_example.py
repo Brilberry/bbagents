@@ -1,4 +1,4 @@
-"""Exercise the former README release example and current island snippet."""
+"""Exercise the release example and the island guide's runnable snippet."""
 
 import os
 from pathlib import Path
@@ -21,9 +21,10 @@ def run_readme(directory, answer=""):
     return result.stdout
 
 
-def test_current_readme_island_snippet():
+def test_island_overview_snippet():
     root = Path(__file__).resolve().parents[1]
-    code = (root / "README.md").read_text().split("```python\n", 1)[1].split("```", 1)[0]
+    guide = root / "examples/survival_island/OVERVIEW.md"
+    code = guide.read_text().split("```python\n", 1)[1].split("```", 1)[0]
     result = subprocess.run(
         [sys.executable, "-c", code], cwd=root,
         env={**os.environ, "PYTHONPATH": str(root / "src")},
@@ -33,7 +34,7 @@ def test_current_readme_island_snippet():
     # Predator-enabled runs may kill survivors; verify the snippet's result shape.
     from ast import literal_eval
     survivors = literal_eval(result.stdout.strip())
-    assert [name for name, _ in survivors] == ["Ari", "Bo", "Cyra", "Dax", "Ena", "Finn"]
+    assert [name for name, _ in survivors] == ["Ari", "Bo", "Cyra", "Dax", "Ena"]
     assert all(isinstance(alive, bool) for _, alive in survivors)
 
 
