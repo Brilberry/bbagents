@@ -34,9 +34,6 @@ documentation, and run instructions live in that separate repository.
 
 ## Features
 
-The previous README's approval/recovery example is preserved as
-[recoverable_release.py](examples/recoverable_release.py).
-
 - Typed tools, dependency-checked plans, structured model decisions and validation.
 - Per-agent model selection, routing constraints, cost estimates and caching.
 - Capability policies, human intervention, explicit delegation and LangGraph interrupts.
