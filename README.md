@@ -35,6 +35,7 @@ documentation, and run instructions live in that separate repository.
 ## Features
 
 - Typed tools, dependency-checked plans, structured model decisions and validation.
+- Prioritized behavior controllers with explicit abstention and selection traces.
 - Per-agent model selection, routing constraints, cost estimates and caching.
 - Capability policies, human intervention, explicit delegation and LangGraph interrupts.
 - Bounded async execution, retry policies, execution journals and effect reconciliation.

@@ -78,6 +78,76 @@ and decision contracts. Import specialised components from their module, such as
 `bbagents.intervention`, `bbagents.models`, `bbagents.safety`, or
 `bbagents.observability`.
 
+## Behavior selection
+
+`bbagents.behavior` selects which controller proposes the next `ToolCall`.
+It does not authorize or execute that call, complete a `PlanStep`, or replace an
+orchestration runtime. Policies conform structurally to `BehaviorPolicy[ContextT]`:
+implement `propose(context)` returning `Proposal(action, reason)` or
+`Abstain(reason)`. Context is application-defined; no inheritance is required.
+
+```python
+from bbagents import ToolCall
+from bbagents.behavior import Abstain, PolicyRule, PolicySelector, Proposal
+
+class ReviewController:
+    def propose(self, context: bool) -> Proposal | Abstain:
+        if not context:
+            return Abstain("No review requested")
+        return Proposal(ToolCall("inspect"), "Review requested")
+
+selector = PolicySelector([
+    PolicyRule("review", ReviewController(), priority=20),
+])
+selection = selector.select(True)
+assert selection.policy == "review"
+```
+
+Rules are snapshotted at construction, sorted by descending integer priority,
+and evaluated in registration order for ties. Negative priorities are valid.
+Names must be unique, nonblank strings of at most 128 characters. Construction
+never calls a policy. First proposal wins; lower controllers are not evaluated.
+`Selection.considered` contains only evaluated attempts in execution order.
+Empty or all-abstaining selectors return `policy=None`, `action=None`, and reason
+`"No policy proposed an action"`. The application handles this explicitly; there
+is no implicit fallback or action cache. Construct a new selector to change rules.
+
+By default, an evaluation exception raises `PolicySelectionError` with the policy
+name, error class, and evaluated attempts; its `__cause__` retains the original
+exception for authorized callers. `error_mode="skip"` explicitly permits later
+controllers to run after ordinary evaluation errors, retaining failed attempts.
+Choose it deliberately: skipping a broken emergency controller may be unsafe.
+Invalid returned values (including `None`, awaitables, non-`ToolCall` proposals,
+and non-string reasons) always raise `TypeError`, even in skip mode. Returned
+values are validated at the selection boundary. Signals such as `KeyboardInterrupt`
+and trace-sink failures propagate. No evaluation is automatically retried.
+
+Tracing uses the existing `TraceSink`: `behavior.policy_evaluated` precedes a
+terminal `behavior.selected` or `behavior.no_match`. Raised evaluation/contract
+errors emit only the evaluated error event. Registration indices are zero-based
+original input positions, not sorted positions. Default payloads contain policy
+names, priorities, outcomes, error classes, and selected tool names, never context,
+arguments, exception text, or reason strings. `trace_reasons=True` opts into reason
+tracing; reasons may contain secrets. Select trusted policy/tool names and use a
+trace redactor (for example `KeyRedactor(frozenset({"reason"}))`) when needed.
+Returned selections still carry policy reasons; handle them as application data.
+
+Policies should be fast, synchronous, nonblocking inspections of available state.
+An available-model-plan controller can read a previously validated plan; model
+calls, inference admission, cooldowns, and lifecycle updates stay outside
+`select()`. This is trusted in-process Python, not enforced purity or a sandbox.
+The same context reference reaches each evaluated policy. Values are frozen but
+only shallowly immutable: applications own snapshot stability and mutable objects
+inside `ToolCall.arguments`. No context or arguments are copied or mutated by the
+selector; thread safety of stateful policies remains application-owned.
+
+Applications execute selected calls through their existing tool or actor-bound
+action path and update plan evidence only after handling the result. Tool
+preconditions and authorization still apply. A denial is not an instruction to
+select a lower-priority fallback automatically. Selection also does not cancel,
+suspend, or erase another controller's work. See the complete offline
+[`behavior_policy_selection.py`](examples/behavior_policy_selection.py) example.
+
 ## Examples
 
 Runnable examples include:

@@ -20,6 +20,31 @@ The release and pandemic integration fixtures are documented in [demos](../demos
 The test suite executes every offline example. Hosted tracing exporters are tested
 with fake clients rather than uploading traces during tests.
 
+## Behavior policy selection
+
+`behavior_policy_selection.py` composes application-defined controllers over a
+custom inspection context. An incident controller abstains, an available-plan
+controller wins, and the lower-priority inventory fallback is never evaluated.
+The example then executes the selected `ToolCall` with `ToolRegistry.execute` and
+updates milestone evidence/status in a separate application-owned feedback phase.
+It runs offline with no model calls, credentials, or optional dependencies:
+
+```console
+python examples/behavior_policy_selection.py
+```
+
+Behavior selection is not authorization or execution. The selector does not advance
+plans, retry tools, suspend competing work, or launch model inference. Applications
+retain those responsibilities and handle `selection.action is None` explicitly.
+Use `ActionRuntime` and its existing policies for guarded side effects, supplying
+the real actor, approval, and effect metadata in the application rather than
+inferring them from a `ToolCall`.
+
+`error_mode="raise"` stops on a broken controller; explicit `"skip"` can bypass
+ordinary evaluation errors, but never invalid returns or trace failures. The
+[guide](../GUIDE.md#behavior-selection) details trace privacy, opt-in reason
+tracing, shallow snapshot ownership, and the limits of trusted synchronous policies.
+
 ## LangGraph integration
 
 `langgraph_integration.py` demonstrates the inverse of the LangChain example's
