@@ -43,3 +43,5 @@ The previous README's approval/recovery example is preserved as
 No mandatory runtime dependencies. Applications own domain behavior and adapters.
 
 See [examples](examples/), [demos](demos/) and the [guide](GUIDE.md).
+
+Maintainers: see [release instructions](RELEASING.md) for publishing to PyPI.
