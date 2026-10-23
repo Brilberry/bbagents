@@ -1,5 +1,8 @@
 # Examples
 
+For a more complete application, see [Agent Stranded](https://github.com/Brilberry/agentstranded),
+an autonomous survival game built with bbagents. The game is maintained separately.
+
 ## Production contracts
 
 All of these examples run offline by default:

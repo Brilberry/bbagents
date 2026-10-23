@@ -17,11 +17,12 @@ pip install -e '.[dev]'
 pytest
 ```
 
-## Survival Island example
+## Complete application example
 
-[Survival Island](examples/survival_island/README.md) demonstrates autonomous agents
-using bbagents planning, tools, memory, skills, and tracing in a seeded survival
-simulation, with an optional local LLM. See the [overview and run instructions](examples/survival_island/OVERVIEW.md).
+[Agent Stranded](https://github.com/Brilberry/agentstranded) is a more complete
+example: an autonomous survival game using bbagents planning, tools, memory,
+skills, communication, and tracing, with an optional local LLM. Its code,
+documentation, and run instructions live in that separate repository.
 
 ## Features
 

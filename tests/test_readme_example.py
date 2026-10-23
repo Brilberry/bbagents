@@ -1,4 +1,4 @@
-"""Exercise the release example and the island guide's runnable snippet."""
+"""Exercise the recoverable release example."""
 
 import os
 from pathlib import Path
@@ -19,23 +19,6 @@ def run_readme(directory, answer=""):
     )
     assert result.returncode == 0, result.stderr
     return result.stdout
-
-
-def test_island_overview_snippet():
-    root = Path(__file__).resolve().parents[1]
-    guide = root / "examples/survival_island/OVERVIEW.md"
-    code = guide.read_text().split("```python\n", 1)[1].split("```", 1)[0]
-    result = subprocess.run(
-        [sys.executable, "-c", code], cwd=root,
-        env={**os.environ, "PYTHONPATH": str(root / "src")},
-        capture_output=True, text=True, timeout=15,
-    )
-    assert result.returncode == 0, result.stderr
-    # Predator-enabled runs may kill survivors; verify the snippet's result shape.
-    from ast import literal_eval
-    survivors = literal_eval(result.stdout.strip())
-    assert [name for name, _ in survivors] == ["Ari", "Bo", "Cyra", "Dax", "Ena"]
-    assert all(isinstance(alive, bool) for _, alive in survivors)
 
 
 def approve_release(directory):
