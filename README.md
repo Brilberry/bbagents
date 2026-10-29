@@ -1,5 +1,9 @@
 # bbagents
 
+<a href="https://www.buymeacoffee.com/brilberry">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee" width="217" height="60">
+</a>
+
 Python building blocks for agent systems: tools, planning, model selection, memory,
 human approval, tracing, and evaluation. Works with LangGraph or your own runtime.
 
