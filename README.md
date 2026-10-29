@@ -4,7 +4,8 @@ Python building blocks for agent systems: tools, planning, model selection, memo
 human approval, tracing, and evaluation. Works with LangGraph or your own runtime.
 
 Companion code for *Agentic AI: Architecture, Theory, and Practice*.
-[Buy the book](https://press.brilberry.com).
+[Buy on Brilberry Press](https://press.brilberry.com) or
+[Buy on Barnes & Nobles](https://www.barnesandnoble.com/w/agentic-ai-marco-dinacci/1151816412?ean=2940185526651).
 
 <a href="https://press.brilberry.com">
   <img src="assets/book-cover.png" alt="Agentic AI: Architecture, Theory, and Practice by Marco Dinacci" width="240" height="360">
