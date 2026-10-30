@@ -297,7 +297,7 @@ def test_explicit_failure_outcome_runs_and_survives_checkpoint_without_retry():
     assert run.tick(Frame({"health": 10}, Event("idle"))) == Status.SUCCESS
     assert len(handlers["attack"].calls) == 1
     assert not handlers["eat"].calls
-    assert any(event.name.value == "behavior_tree.outcome" for event in trace.events)
+    assert any(event.name == "behavior_tree.outcome" for event in trace.events)
 
 
 def test_explicit_success_outcome_failure_is_returned_without_retry():
@@ -781,7 +781,7 @@ def test_scheduler_traces_do_not_expose_context_or_event_payload():
     assert "private-value" not in repr(attributes) and "private-entity" not in repr(
         attributes
     )
-    assert [event.name.value for event in trace.events] == [
+    assert [event.name for event in trace.events] == [
         "decision_policy.selected",
         "behavior_tree.node_entered",
         "behavior_tree.node_finished",

@@ -266,7 +266,7 @@ def test_trace_exact_order_and_private_context_and_cancel():
         trace=trace,
     ).start()
     actor.tick({"secret": "private-value"})
-    assert [event.name.value for event in trace.events] == [
+    assert [event.name for event in trace.events] == [
         "behavior_tree.node_entered",
         "behavior_tree.condition",
         "behavior_tree.branch",
@@ -278,7 +278,7 @@ def test_trace_exact_order_and_private_context_and_cancel():
     assert trace.events[2].attributes["branch"] == "yes"
     assert "private-value" not in repr([event.attributes for event in trace.events])
     actor.cancel(None)
-    assert trace.events[-1].name.value == "behavior_tree.cancelled"
+    assert trace.events[-1].name == "behavior_tree.cancelled"
 
 
 def test_trace_failure_blocks_next_tick_without_reexecuting_action():
@@ -429,7 +429,7 @@ def test_identical_execution_replays_have_identical_data_and_trace():
         return (
             tree.to_data(),
             states,
-            [(event.name.value, dict(event.attributes)) for event in trace.events],
+            [(event.name, dict(event.attributes)) for event in trace.events],
         )
 
     assert replay() == replay()
