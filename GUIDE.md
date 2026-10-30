@@ -278,3 +278,71 @@ The root API stays small; import these features from their responsibility module
   LangGraph, Langfuse, LangSmith, or another platform directly. The default tracing
   example runs locally and exports to Langfuse when configured; optional Langfuse
   and LangSmith adapters translate planning events into nested hosted traces.
+
+## Native behavior trees
+
+`bbagents.behavior_trees` provides execution separately from the proposal-only
+`PolicySelector`. See [the offline example](examples/native_behavior_tree.py).
+No existing policy API or root imports change.
+
+Definitions use `Action`, `Condition`, `Selector`, `Sequence`, `Inverter`, and
+`Branch`. Every node has a unique stable ID. Leaves reference application-bound
+operation or predicate names. `BehaviorTree.to_data()` and `from_data()` serialize
+only the definition; they never load Python code. Definitions are bounded to
+1,024 nodes and 64 levels. Keep bindings stable for the lifetime of a tree.
+
+- Actions return exactly `Status.SUCCESS`, `FAILURE`, or `RUNNING`. Conditions
+  return exactly bool. Invalid returns are errors, not failed actions.
+- Sequence proceeds on success; Selector proceeds on failure. Both remember their
+  running child. Inverter swaps success/failure and preserves running.
+- Branch evaluates its predicate once per traversal, pins the YES/NO arm while
+  running, and returns that arm's outcome unchanged. A failed YES action never
+  executes NO. Use this primitive when compiling player-facing decision trees;
+  an ordinary Selector of guarded Sequences does not provide that guarantee.
+- Terminal traversals reset progress. A subsequent tick starts another traversal.
+  Multiple instantaneous leaves can execute in one tick; an adapter must return
+  RUNNING if its work spans intervals. This is not an implicit one-tool-per-tick
+  budget or an asynchronous worker scheduler.
+
+Call `tree.start()` once per actor. `Execution.tick(context)` advances only that
+actor's state. Action handlers receive a private JSON-data memory dictionary;
+shared handler instances must keep actor progress there, rather than on `self`.
+Separate executions are isolated only if application adapters also respect that
+contract. Concurrent/reentrant operations on the same execution are unsupported;
+reentrant calls fail, but this is not thread synchronization or a sandbox.
+
+The caller owns event detection and scheduling. These composites are memoryful,
+not reactive: when a higher-priority event arrives or a branch becomes invalid,
+call `execution.cancel(fresh_context)` before selecting new work. Cancellation
+invokes the running action's cleanup and clears tree progress. It does not undo
+world effects or promise resumable external jobs. Domain projects can retain their
+own completed work and validate it when a later action restarts. Cleanup callbacks
+must tolerate retries after failure. Failed cleanup blocks subsequent ticks.
+
+`Execution.snapshot()` returns detached JSON data, including cursors, pinned
+branches, action memory and a definition fingerprint. Restore with
+`Execution.restore(tree, data)`; inconsistent active paths or different tree
+schemas are rejected. Callbacks/context are never serialized. The fingerprint
+identifies definition data, not callback code or external world state: applications
+must pin adapter versions, persist world state consistently, authenticate incoming
+checkpoints and reconcile outstanding effects. This is not exactly-once execution.
+
+Callback errors fail closed and chain the original exception. Cancel successfully
+before ticking again. Trace sink errors also propagate and fault execution rather
+than silently retrying side effects. Terminal actions are not cancelled again.
+`BaseException` signals propagate. Snapshots of busy/faulted executions are refused.
+
+Structured `behavior_tree.*` events identify tree fingerprint, explicit tick step,
+node entry/results, condition bool, selected branch, cancellation and error class.
+They omit context, memory, exception text and tool arguments. Applications should
+use stable node IDs to highlight their authoring view and record authorized action
+results, energy expenditure and observed entities separately. Trace sinks are
+shared bindings; supply actor/run correlation with the existing trace adapters.
+No clocks or randomness are consumed by the tree engine itself.
+
+Operation callbacks are trusted code and must use the application's existing
+`ToolRegistry` / `ActionRuntime` path, including authorization and fresh domain
+preconditions. Returning SUCCESS is the adapter's report, not proof of execution
+or permission. Energy, action duration, event registries, scheduler priorities,
+hysteresis and player-facing decision-tree compilation remain application or
+subsequent integration concerns; this module supplies their execution foundation.
