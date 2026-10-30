@@ -83,7 +83,17 @@ class Branch:
     no: Node
 
 
-Node = Action | Condition | Selector | Sequence | Inverter | Branch
+@dataclass(frozen=True, slots=True)
+class Outcome:
+    """Run an explicit result handler, without retrying the completed child."""
+
+    id: str
+    child: Node
+    success: Node | None = None
+    failure: Node | None = None
+
+
+Node = Action | Condition | Selector | Sequence | Inverter | Branch | Outcome
 
 
 class BehaviorTreeError(RuntimeError):
@@ -102,6 +112,10 @@ def _children(node: Node) -> tuple[Node, ...]:
         return (node.child,)
     if isinstance(node, Branch):
         return (node.yes, node.no)
+    if isinstance(node, Outcome):
+        return (node.child,) + tuple(
+            child for child in (node.success, node.failure) if child is not None
+        )
     return ()
 
 
@@ -115,9 +129,15 @@ def _encode(node: Node) -> dict[str, Any]:
         data["children"] = [_encode(child) for child in node.children]
     elif isinstance(node, Inverter):
         data["child"] = _encode(node.child)
-    else:
+    elif isinstance(node, Branch):
         data.update(
             predicate=node.predicate, yes=_encode(node.yes), no=_encode(node.no)
+        )
+    else:
+        data.update(
+            child=_encode(node.child),
+            success=None if node.success is None else _encode(node.success),
+            failure=None if node.failure is None else _encode(node.failure),
         )
     return data
 
@@ -135,6 +155,7 @@ def _decode(data: Any, depth: int = 1, budget: list[int] | None = None) -> Node:
         "sequence": {"children"},
         "inverter": {"child"},
         "branch": {"predicate", "yes", "no"},
+        "outcome": {"child", "success", "failure"},
     }
     if (
         not isinstance(kind, str)
@@ -160,6 +181,17 @@ def _decode(data: Any, depth: int = 1, budget: list[int] | None = None) -> Node:
         )
     if kind == "inverter":
         return Inverter(identity, _decode(data["child"], depth + 1, budget))
+    if kind == "outcome":
+        return Outcome(
+            identity,
+            _decode(data["child"], depth + 1, budget),
+            None
+            if data["success"] is None
+            else _decode(data["success"], depth + 1, budget),
+            None
+            if data["failure"] is None
+            else _decode(data["failure"], depth + 1, budget),
+        )
     return Branch(
         identity,
         data["predicate"],
@@ -208,7 +240,7 @@ class BehaviorTree(Generic[ContextT]):
 
         def visit(node: Node, depth: int) -> None:
             if not isinstance(
-                node, (Action, Condition, Selector, Sequence, Inverter, Branch)
+                node, (Action, Condition, Selector, Sequence, Inverter, Branch, Outcome)
             ):
                 raise TypeError("Unsupported behavior-tree node")
             _name(node.id)
@@ -290,6 +322,7 @@ class Execution(Generic[ContextT]):
         self.tree = tree
         self._cursors: dict[str, int] = {}
         self._branches: dict[str, bool] = {}
+        self._outcomes: dict[str, str] = {}
         self._memory: dict[str, dict[str, Any]] = {}
         self._active: str | None = None
         self._faulted = False
@@ -386,6 +419,23 @@ class Execution(Generic[ContextT]):
             result = self._visit(node.yes if yes else node.no, context)
             if result != Status.RUNNING:
                 self._branches.pop(node.id, None)
+        elif isinstance(node, Outcome):
+            previous = self._outcomes.get(node.id)
+            result = (
+                Status(previous)
+                if previous is not None
+                else self._visit(node.child, context)
+            )
+            if result != Status.RUNNING:
+                selected = node.success if result == Status.SUCCESS else node.failure
+                if selected is not None:
+                    self._outcomes[node.id] = result.value
+                    self._record(
+                        TraceEventName.TREE_OUTCOME, node=node.id, outcome=result.value
+                    )
+                    result = self._visit(selected, context)
+                if result != Status.RUNNING:
+                    self._outcomes.pop(node.id, None)
         else:
             index = self._cursors.get(node.id, 0)
             advance_on = (
@@ -433,6 +483,7 @@ class Execution(Generic[ContextT]):
                 self._active = None
             self._cursors.clear()
             self._branches.clear()
+            self._outcomes.clear()
             self._memory.clear()
             self._record(TraceEventName.TREE_CANCELLED)
             self._faulted = False
@@ -456,6 +507,7 @@ class Execution(Generic[ContextT]):
                     "branches": self._branches,
                     "memory": self._memory,
                     "active": self._active,
+                    **({"outcomes": self._outcomes} if self._outcomes else {}),
                 }
             ),
         )
@@ -471,24 +523,26 @@ class Execution(Generic[ContextT]):
         """
         state = _json_copy(dict(data))
         if (
-            set(state)
+            set(state) - {"outcomes"}
             != {"version", "tree", "step", "cursors", "branches", "memory", "active"}
             or type(state["version"]) is not int
             or state["version"] != 1
             or state["tree"] != tree.fingerprint
         ):
             raise ValueError("Incompatible behavior-tree checkpoint")
+        state.setdefault("outcomes", {})
         if (
             type(state["step"]) is not int
             or state["step"] < 0
             or any(
                 type(state[key]) is not dict
-                for key in ("cursors", "branches", "memory")
+                for key in ("cursors", "branches", "memory", "outcomes")
             )
         ):
             raise ValueError("Invalid checkpoint state")
         expected_cursors: set[str] = set()
         expected_branches: set[str] = set()
+        expected_outcomes: set[str] = set()
         active = state["active"]
         if active is not None and (
             not isinstance(active, str)
@@ -512,11 +566,26 @@ class Execution(Generic[ContextT]):
                     node = node.yes if yes else node.no
                 elif isinstance(node, Inverter):
                     node = node.child
+                elif isinstance(node, Outcome):
+                    outcome = state["outcomes"].get(node.id)
+                    if outcome is None:
+                        node = node.child
+                    else:
+                        if outcome not in ("success", "failure"):
+                            raise ValueError("Invalid active action outcome")
+                        expected_outcomes.add(node.id)
+                        selected = (
+                            node.success if outcome == "success" else node.failure
+                        )
+                        if selected is None:
+                            raise ValueError("Missing active outcome handler")
+                        node = selected
                 else:
                     raise ValueError("Active action is not on checkpoint path")
         if (
             set(state["cursors"]) != expected_cursors
             or set(state["branches"]) != expected_branches
+            or set(state["outcomes"]) != expected_outcomes
             or set(state["memory"]) != ({active} if active else set())
             or any(type(value) is not dict for value in state["memory"].values())
         ):
@@ -525,6 +594,7 @@ class Execution(Generic[ContextT]):
         execution._step = state["step"]
         execution._cursors = state["cursors"]
         execution._branches = state["branches"]
+        execution._outcomes = state["outcomes"]
         execution._memory = state["memory"]
         execution._active = active
         return execution
