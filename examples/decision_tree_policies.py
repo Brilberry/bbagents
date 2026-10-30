@@ -154,7 +154,7 @@ def run_example() -> dict[str, Any]:
         "selected": selections,
         "evidence": evidence,
         "trace": [
-            {"name": event.name.value, "attributes": dict(event.attributes)}
+            {"name": event.name, "attributes": dict(event.attributes)}
             for event in trace.events
         ],
     }
