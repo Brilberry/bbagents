@@ -285,8 +285,8 @@ The root API stays small; import these features from their responsibility module
 `PolicySelector`. See [the offline example](examples/native_behavior_tree.py).
 No existing policy API or root imports change.
 
-Definitions use `Action`, `Condition`, `Selector`, `Sequence`, `Inverter`, and
-`Branch`. Every node has a unique stable ID. Leaves reference application-bound
+Definitions use `Action`, `Condition`, `Selector`, `Sequence`, `Inverter`,
+`Branch`, and `Outcome`. Every node has a unique stable ID. Leaves reference application-bound
 operation or predicate names. `BehaviorTree.to_data()` and `from_data()` serialize
 only the definition; they never load Python code. Definitions are bounded to
 1,024 nodes and 64 levels. Keep bindings stable for the lifetime of a tree.
@@ -303,6 +303,10 @@ only the definition; they never load Python code. Definitions are bounded to
   Multiple instantaneous leaves can execute in one tick; an adapter must return
   RUNNING if its work spans intervals. This is not an implicit one-tool-per-tick
   budget or an asynchronous worker scheduler.
+- Outcome runs an explicitly attached success/failure handler after its child
+  terminates. While that handler runs, the original child is not retried. Missing
+  handlers preserve the original result; a handler's result becomes the result
+  of the Outcome node. Cleanup targets the currently running action only.
 
 Call `tree.start()` once per actor. `Execution.tick(context)` advances only that
 actor's state. Action handlers receive a private JSON-data memory dictionary;
@@ -343,6 +347,168 @@ No clocks or randomness are consumed by the tree engine itself.
 Operation callbacks are trusted code and must use the application's existing
 `ToolRegistry` / `ActionRuntime` path, including authorization and fresh domain
 preconditions. Returning SUCCESS is the adapter's report, not proof of execution
-or permission. Energy, action duration, event registries, scheduler priorities,
-hysteresis and player-facing decision-tree compilation remain application or
-subsequent integration concerns; this module supplies their execution foundation.
+or permission. Applications own energy accounting, duration and domain semantics.
+The following modules provide typed registries, decision compilation and event
+scheduling on this execution foundation.
+
+## Decision policies: author decisions, execute native trees
+
+Use `bbagents.policy_registry` for application-owned registrations,
+`bbagents.decision_policies.DecisionCompiler` to validate/compile JSON policies,
+and `bbagents.policy_scheduler.PolicyScheduler` for one actor's scheduling.
+The [offline example](examples/decision_tree_policies.py) includes actual tool
+adapters, need hysteresis, emergency interruption and checkpoint restoration.
+The existing proposal-only `bbagents.behavior.PolicySelector` is unchanged.
+
+A policy's canonical representation is a versioned decision AST, not a behavior
+tree. Its event is the entry point; its root is an action or a condition with
+explicit YES and NO children. For example, given matching registrations:
+
+```json
+{
+  "version": 1,
+  "id": "respond_to_threat",
+  "event": "threat_nearby",
+  "priority": 100,
+  "cooldown_steps": 2,
+  "enabled": true,
+  "root": {
+    "id": "armed",
+    "type": "condition",
+    "condition": {
+      "type": "compare", "attribute": "has_weapon", "op": "==", "value": true
+    },
+    "yes": {
+      "id": "health",
+      "type": "condition",
+      "condition": {
+        "type": "compare", "attribute": "health", "op": ">", "value": 50
+      },
+      "yes": {
+        "id": "attack", "type": "action", "action": "attack",
+        "parameters": {},
+        "failure": {"id": "escape_after_failure", "type": "action", "action": "flee"}
+      },
+      "no": {"id": "escape_injured", "type": "action", "action": "flee"}
+    },
+    "no": {"id": "escape_unarmed", "type": "action", "action": "flee"}
+  }
+}
+```
+
+Conditions accept `compare` (`attribute`, `op`, `value`), `and`/`or` (`children`),
+and `not` (`child`). Numeric attributes support `>`, `<`, `>=`, `<=`, `==`, `!=`;
+booleans and strings support equality/inequality only. Bool is never a number.
+Values, bounds, choices, parameters and event contexts are checked at compilation.
+Required parameters must be supplied; optional parameters use registered defaults.
+Both condition branches are required; optional action `success` and `failure`
+subtrees provide explicit outcomes. Without them, actions return their result.
+Failure never causes execution of the opposite condition arm or another policy
+in the same scheduler step. Authoring layout belongs outside this semantic AST.
+
+The compiler produces native Branch/Action/Outcome nodes. Node IDs map back to
+AST IDs; an action with outcome handlers has a generated `<id>:operation` leaf.
+All nodes must occur once in the nested tree. Unknown fields/types, missing arms,
+invalid IDs and oversized/cyclic input are rejected. Policy limits are 256 nodes,
+24 tree levels, 512 expression nodes and 24 expression levels, in addition to
+bounded JSON input and the native engine's limits. `compiled.to_data()` returns a
+detached normalized AST. Recompiling it preserves native fingerprints, including
+condition literals, parameter values, priorities, registry catalog and version.
+The AST, not the compiled native representation, should be persisted for editing.
+No source strings, expression eval, arbitrary imports or model calls are accepted.
+
+### Registrations and observable information
+
+`PolicyRegistry(version=..., events=..., attributes=..., actions=...)` snapshots
+registrations with unique names. `catalog()` returns JSON metadata for an editor:
+labels, descriptions, attribute/parameter types, supported values/operators, event
+contexts and action energy/duration/effect descriptions. Registering new entries
+extends this catalog without changing editor-specific lists.
+
+`AttributeSpec` provides a `ValueSpec` and a trusted reader receiving
+`Frame(context, event)`. Context is application-defined; it should be an actor's
+observation snapshot, not unrestricted world state. Event-scoped attributes/actions
+cannot be compiled into an incompatible event's policy. Readers return
+`UNAVAILABLE` for unobserved properties. Unknown propagates through NOT as well as
+AND/OR; only a known true expression selects YES. A known true OR unknown is true,
+and a known false AND unknown is false. Missing knowledge cannot become true merely
+by negating it. Typed registries do not sandbox malicious application callbacks or
+guarantee that supplied event observations remain current.
+
+`ActionSpec` binds a trusted `ParameterizedAction` (`tick` and `cancel`) and typed
+parameters. Its optional precondition is checked on every active action interval.
+If it becomes false, running work is cancelled before FAILURE is reported; a
+failed cleanup faults execution. Adapters still own authorized tool execution,
+actual success/failure, movement, equipment, attribute effectiveness and energy
+accounting. `EnergyCost` is nonnegative display metadata with `per_action`,
+`per_interval`, or `recovery` mode. The framework does not deduct energy again,
+implement physiology or promise that displayed estimates equal measured costs.
+Long-running adapters must pay the ordinary domain cost on each execution interval
+and cap recovery in their domain code. Condition/event callbacks should be pure,
+fast and synchronous; exceptions fail closed, not as false or abstention.
+
+### Events, priorities and lifecycle
+
+`EventSpec(kind="level", active=..., release=...)` represents a persistent need or
+situation. Its typed `fields` are configurable policy `event_parameters`, for
+example `{ "start": 70, "stop": 30 }`. Predicates read those through
+`frame.event.payload`. Each policy latches independently: `active` starts it;
+`release` ends it. With no release predicate, `active` is checked continuously.
+Applications validate domain relationships such as stop < start when defining
+configurations. The first observation above a threshold activates a level; there
+is no requirement to have observed a previous below-threshold value. Finishing an
+action does not clear an unmet need. A running branch remains pinned until it
+finishes or the scheduler cancels it; domain-invalidating events/preconditions
+must therefore be provided explicitly rather than assuming reactive composites.
+
+`EventSpec(kind="occurrence", fields=...)` describes an event that happened once.
+Applications deliver `Event(name, sequence, payload)` in increasing, unique sequence
+order to `scheduler.tick(context, step=..., events=...)`. Sequences are nonnegative,
+monotonic identifiers from the actor's event stream, not random IDs. Already
+accepted sequences are ignored on replay; do not reuse them for changed payloads.
+Payloads are validated observations supplied by the application, not live entity
+handles. Occurrence policies cannot define their payload in `event_parameters`.
+Occurrences broadcast to matching enabled policies and queue FIFO until scheduled,
+including through cooldowns. Per-policy capacity (default 64, including active
+occurrence work) bounds memory. Overflow rejects the entire incoming batch before
+any action or queue mutation; applications must retry or apply explicit backpressure.
+No pending event is silently evicted. Disabled policies do not receive occurrences.
+
+The scheduler snapshots policy registration, selects descending priority, and uses
+input order for initial ties. Priorities have no built-in game categories; an
+application can assign 100/80/60/40/20/10 as appropriate. Running work wins equal
+priority ties and is interrupted only by a strictly higher priority or release of
+its level event. Cancellation finishes before the replacement action starts; a
+cleanup failure blocks replacement. Preempted occurrence work goes back to the
+front of its queue. Tree progress restarts on later selection; completed domain
+projects/effects are not undone. Explicit `cancel(context)` consumes the active
+occurrence and clears faults, retaining other queues and level latches. It does
+not disable a policy or stop a persistent level from starting again next step.
+
+Exactly one selected policy advances per step, though its native tree can complete
+multiple instantaneous leaves. A success/failure terminates that invocation and
+sets eligibility to `step + cooldown_steps + 1`: cooldown 2 skips the next two
+integer steps. Steps must strictly increase and come from simulation time. No wall
+clock, randomness, background inference, fairness rotation or automatic fallback
+action is used. Levels and events can starve lower priorities by design; the game
+must choose sensible event release conditions and priorities.
+
+`PolicyScheduler.snapshot()` includes active native execution, queued occurrences,
+level latches, cooldowns and accepted sequence/step. Restore requires the same
+ordered policy collection, registry catalog/version and queue capacity. Invalid
+active paths, conflicting event payloads, unknown/disabled policies and incompatible
+fingerprints are rejected. As with native checkpoints, callbacks/world effects are
+not serialized or authenticated; pin callback semantics and persist/reconcile world
+state separately. Scheduler instances are actor-local and must not be concurrently
+ticked. Runtime or tracing failures require explicit cleanup before reuse.
+
+Structured `decision_policy.*` events expose level transitions, selection,
+interruption reasons, completion/cooldowns and idle/cancelled states. Native traces
+supply condition, branch, action and outcome-node execution. They omit context,
+parameter/payload contents and memory. Frontends consume these authoritative traces;
+they must not implement their own policy evaluator. Applications supply actor/run
+correlation and separately record actual costs, effects and observable entity data.
+
+This framework layer does not migrate game templates, replace an existing editor,
+change balancing, publish a release or add natural-language generation. Those
+integrations should consume this AST/catalog and native execution contract.

@@ -443,3 +443,61 @@ def test_native_example_reports_running_interruption_and_completion():
         "interrupted": "running",
         "completed": "success",
     }
+
+
+def test_native_outcome_codec_checkpoint_and_cancel_followup_only():
+    from bbagents.behavior_trees import Outcome
+
+    first, followup = Work(result=Status.FAILURE), Work(5)
+    bindings = {"first": first, "followup": followup}
+    tree = BehaviorTree(
+        Outcome(
+            "result", Action("first", "first"), failure=Action("followup", "followup")
+        ),
+        actions=bindings,
+        conditions={},
+    )
+    run = tree.start()
+    assert run.tick(None) == Status.RUNNING
+    rebuilt = BehaviorTree.from_data(tree.to_data(), actions=bindings, conditions={})
+    run = Execution.restore(rebuilt, run.snapshot())
+    assert run.tick(None) == Status.RUNNING
+    assert len(first.calls) == 1
+    run.cancel(None)
+    assert not first.cancellations
+    assert followup.cancellations == [(None, {"progress": 2})]
+    assert "outcomes" not in run.snapshot()
+
+
+def test_native_outcome_without_matching_handler_preserves_child_status():
+    from bbagents.behavior_trees import Outcome
+
+    followup = Work()
+    tree = BehaviorTree(
+        Outcome(
+            "result", Action("first", "first"), success=Action("followup", "followup")
+        ),
+        actions={"first": Work(result=Status.FAILURE), "followup": followup},
+        conditions={},
+    )
+    assert tree.start().tick(None) == Status.FAILURE
+    assert not followup.calls
+
+
+def test_native_outcome_checkpoint_rejects_wrong_phase_or_handler():
+    from bbagents.behavior_trees import Outcome
+
+    tree = BehaviorTree(
+        Outcome(
+            "result", Action("first", "first"), failure=Action("followup", "followup")
+        ),
+        actions={"first": Work(result=Status.FAILURE), "followup": Work(3)},
+        conditions={},
+    )
+    run = tree.start()
+    run.tick(None)
+    for wrong in ("running", "success", False):
+        state = run.snapshot()
+        state["outcomes"]["result"] = wrong
+        with pytest.raises(ValueError):
+            Execution.restore(tree, state)
