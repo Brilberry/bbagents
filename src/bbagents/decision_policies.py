@@ -89,6 +89,9 @@ class CompiledPolicy(Generic[ContextT]):
     _canonical: str
     fingerprint: str
     registry_fingerprint: str
+    group: str | None = None
+    weight: int = 1
+    eligible_when: Expression[ContextT] | None = None
 
     def to_data(self) -> dict[str, Any]:
         return json.loads(self._canonical)  # type: ignore[no-any-return]
@@ -115,7 +118,17 @@ class DecisionCompiler(Generic[ContextT]):
             not isinstance(data, Mapping)
             or not required <= set(data)
             or set(data)
-            - (required | {"event_parameters", "priority", "cooldown_steps", "enabled"})
+            - (
+                required
+                | {
+                    "event_parameters",
+                    "priority",
+                    "cooldown_steps",
+                    "enabled",
+                    "scheduling",
+                    "when",
+                }
+            )
         ):
             raise ValueError("Policy requires version, id, event and root")
         if type(data["version"]) is not int or data["version"] != 1:
@@ -150,6 +163,17 @@ class DecisionCompiler(Generic[ContextT]):
             event_values = parameters(event_spec.fields, event_values)
         nodes: set[str] = set()
         budget = [512]
+        scheduling = data.get("scheduling")
+        group, weight = None, 1
+        if scheduling is not None:
+            if type(scheduling) is not dict or set(scheduling) != {"group", "weight"}:
+                raise ValueError("Scheduling requires group and weight")
+            group, weight = self._id(scheduling["group"]), scheduling["weight"]
+            if type(weight) is not int or not 1 <= weight <= 100:
+                raise ValueError("Scheduling weight must be an integer from 1 to 100")
+        eligible_when = (
+            self._expression(data["when"], event, budget) if "when" in data else None
+        )
         conditions: dict[str, Callable[[Frame[ContextT]], bool]] = {}
         actions: dict[str, ActionHandler[Frame[ContextT]]] = {}
 
@@ -236,6 +260,12 @@ class DecisionCompiler(Generic[ContextT]):
                 "cooldown_steps": cooldown,
                 "enabled": enabled,
                 "root": canonical_root,
+                **(
+                    {"scheduling": {"group": group, "weight": weight}}
+                    if group is not None
+                    else {}
+                ),
+                **({"when": data["when"]} if "when" in data else {}),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -278,6 +308,9 @@ class DecisionCompiler(Generic[ContextT]):
             canonical,
             fingerprint,
             digest(self.registry.catalog()),
+            group,
+            weight,
+            eligible_when,
         )
 
     @staticmethod
