@@ -489,8 +489,8 @@ Exactly one selected policy advances per step, though its native tree can comple
 multiple instantaneous leaves. A success/failure terminates that invocation and
 sets eligibility to `step + cooldown_steps + 1`: cooldown 2 skips the next two
 integer steps. Steps must strictly increase and come from simulation time. No wall
-clock, randomness, background inference, fairness rotation or automatic fallback
-action is used. Levels and events can starve lower priorities by design; the game
+clock, randomness, background inference or automatic fallback action is used.
+Fairness rotation is opt-in as described below. Levels and events can starve lower priorities by design; the game
 must choose sensible event release conditions and priorities.
 
 `PolicyScheduler.snapshot()` includes active native execution, queued occurrences,
@@ -501,6 +501,71 @@ fingerprints are rejected. As with native checkpoints, callbacks/world effects a
 not serialized or authenticated; pin callback semantics and persist/reconcile world
 state separately. Scheduler instances are actor-local and must not be concurrently
 ticked. Runtime or tracing failures require explicit cleanup before reuse.
+
+### Cooperative work groups and eligibility
+
+The default scheduler behavior above and version-1 checkpoints remain unchanged.
+Opt in to fair service by adding `scheduling` to a policy and configuring its group:
+
+```python
+from bbagents.policy_scheduler import PolicyScheduler, WorkGroup
+
+# Add to an ordinary decision-policy dictionary before compiling:
+work_policy["scheduling"] = {"group": "work", "weight": 2}
+other_work_policy["scheduling"] = {"group": "work", "weight": 1}
+work_policy["when"] = {"type": "compare", "attribute": "health", "op": ">", "value": 50}
+compiled = [compiler.compile(work_policy), compiler.compile(other_work_policy)]
+scheduler = PolicyScheduler(
+    registry, compiled,
+    groups={"work": WorkGroup(priority=20, quantum_steps=4, failure_backoff_steps=4)},
+    work_units=lambda frame: int(frame.context.tool_executed),
+)
+```
+
+Every member must name a configured group; every group must contain a member.
+The group priority is its strict priority band, replacing member priorities for
+selection against other groups/ungrouped policies. Groups do not provide fairness
+across priority bands. Without explicit priorities/groups, registration-order ties
+still apply. A `when` expression uses the existing typed observation language;
+false or unknown makes the policy ineligible without ticking its tree. It is a
+pure readiness check, evaluated at most once per policy per step, not an action.
+
+Within a group, registration order defines a deterministic round-robin ring.
+A turn allows `quantum_steps * weight` charged units, bounded also by that many
+dispatches so zero-charge running work cannot monopolize the group. Weight is an
+integer 1–100; equal weights give round-robin service. Completing a short job does
+not discard its remaining turn, avoiding bias toward long jobs. Ineligible members
+are skipped without accumulating catch-up debt. A failed job backs off for the
+maximum of its normal cooldown and the group's failure backoff, then becomes
+eligible without preempting an existing equal-priority turn. A zero-charge
+terminal job yields its turn immediately.
+
+The trusted `work_units(frame)` callback returns actual consumed units (integer
+0–1,000,000) after an execution tick; default is one logical interval. Applications
+with instantaneous/no-op leaves should supply accurate accounting. Eligibility
+must not execute/probe tools, write logs, or mutate domain state. Service includes
+travel/preparation when those consume units. Ordinary policy cooldowns still apply.
+
+Yielding and urgent preemption park native execution without calling cancellation;
+resumption retains node memory and event identity. Level/guard release pauses
+work until eligible again. Handlers in a work group must be safe to suspend at a
+tick boundary and must revalidate domain targets when resumed. An external job
+that cannot safely yield belongs outside cooperative groups. No tool's synchronous
+execution is interrupted. Explicit `cancel(context)` cleans up active **and**
+parked work; completed domain effects remain application-owned.
+
+Group checkpoints use version 2 and persist cursor, turn usage, dispatch counts,
+per-policy service and parked native executions. Restore must receive the same
+`groups` configuration and `work_units` semantics. Version-1 strict-priority saves
+retain their original schema/fingerprint. Group configuration mismatches and
+malformed accounting/execution state are rejected. Callback code and external
+resources are never serialized.
+
+`decision_policy.candidates`, `.service`, `.yielded` and `.resumed` explain
+eligibility, configured priority/weight, accounted service and lifecycle decisions
+without logging application observations, payloads or action memory. The decision
+AST remains conditions/actions; work groups are scheduler configuration, not new
+random selector nodes or a second tree engine.
 
 Structured `decision_policy.*` events expose level transitions, selection,
 interruption reasons, completion/cooldowns and idle/cancelled states. Native traces

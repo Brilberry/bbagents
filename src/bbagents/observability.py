@@ -33,6 +33,10 @@ class TraceEventName(str, Enum):
     POLICY_FINISHED = "decision_policy.finished"
     POLICY_IDLE = "decision_policy.idle"
     POLICY_CANCELLED = "decision_policy.cancelled"
+    POLICY_CANDIDATES = "decision_policy.candidates"
+    POLICY_YIELDED = "decision_policy.yielded"
+    POLICY_RESUMED = "decision_policy.resumed"
+    POLICY_SERVICE = "decision_policy.service"
     STEP_STARTED = "step.started"
     STEP_FINISHED = "step.finished"
     TOOL_STARTED = "tool.started"
@@ -96,8 +100,7 @@ class KeyRedactor:
 
     def redact(self, attributes: Mapping[str, Any]) -> Mapping[str, Any]:
         return {
-            key: self._redact_value(key, value)
-            for key, value in attributes.items()
+            key: self._redact_value(key, value) for key, value in attributes.items()
         }
 
     def _redact_value(self, key: str, value: Any) -> Any:
@@ -131,9 +134,7 @@ class InMemoryTrace:
         if isinstance(event, TraceEvent):
             self.events.append(self._redact_event(event))
             return
-        self.events.append(
-            self._event(event, payload or {}, context=self.context)
-        )
+        self.events.append(self._event(event, payload or {}, context=self.context))
 
     def child(self) -> "InMemoryTrace":
         """Create a correlated trace for a nested agent or orchestration node."""
@@ -149,11 +150,7 @@ class InMemoryTrace:
 
     def events_named(self, name: TraceEventName | str) -> list[TraceEvent]:
         name_value = _event_name(name)
-        return [
-            event
-            for event in self.events
-            if _event_name(event.name) == name_value
-        ]
+        return [event for event in self.events if _event_name(event.name) == name_value]
 
     def _event(
         self,

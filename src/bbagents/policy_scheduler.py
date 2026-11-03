@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import asdict, dataclass
 from typing import Any, Generic, TypeVar, cast
 
 from .behavior_trees import Execution, Status, _json_copy
@@ -29,6 +29,31 @@ class _Run(Generic[ContextT]):
     event: Event
 
 
+@dataclass(frozen=True, slots=True)
+class WorkGroup:
+    """Strict priority band containing weighted, cooperatively yielding work.
+
+    Weight multiplies the service quantum; unavailable members accrue no debt.
+    A charged interval and a dispatch both bound the current turn. Groups do not
+    change ordering of ungrouped policies. All yielding occurs after tick returns.
+    """
+
+    priority: int
+    quantum_steps: int = 4
+    failure_backoff_steps: int = 4
+
+    def __post_init__(self) -> None:
+        if type(self.priority) is not int:
+            raise ValueError("Work priority must be an integer")
+        if type(self.quantum_steps) is not int or not 1 <= self.quantum_steps <= 1024:
+            raise ValueError("Work quantum must be an integer from 1 to 1024")
+        if (
+            type(self.failure_backoff_steps) is not int
+            or not 0 <= self.failure_backoff_steps <= 1000000
+        ):
+            raise ValueError("Failure backoff must be a nonnegative bounded integer")
+
+
 class PolicySchedulingError(RuntimeError):
     """Event evaluation failed. Explicit cancellation is required before reuse."""
 
@@ -49,6 +74,8 @@ class PolicyScheduler(Generic[ContextT]):
         *,
         max_pending: int = 64,
         trace: TraceSink | None = None,
+        groups: Mapping[str, WorkGroup] | None = None,
+        work_units: Callable[[Frame[ContextT]], int] | None = None,
     ) -> None:
         if type(max_pending) is not int or not 1 <= max_pending <= 4096:
             raise ValueError("max_pending must be an integer from 1 to 4096")
@@ -68,10 +95,32 @@ class PolicyScheduler(Generic[ContextT]):
             if row.id in known:
                 raise ValueError("Duplicate policy ID")
             known.add(row.id)
+        self.groups = dict(groups or {})
+        if any(
+            not isinstance(key, str) or not isinstance(value, WorkGroup)
+            for key, value in self.groups.items()
+        ):
+            raise ValueError("Groups must map names to WorkGroup configurations")
+        if any(row.group is not None and row.group not in self.groups for row in rows):
+            raise ValueError("Policy refers to an unconfigured work group")
+        self._members = {
+            key: tuple(row for row in rows if row.group == key) for key in self.groups
+        }
+        if any(not members for members in self._members.values()):
+            raise ValueError("Every configured group needs at least one policy")
+        if work_units is not None and not callable(work_units):
+            raise TypeError("work_units must be callable")
+        self._work_units = work_units
+        self._cursor = {key: 0 for key in self.groups}
+        self._used = {key: 0 for key in self.groups}
+        self._turn_steps = {key: 0 for key in self.groups}
+        self._service = {row.id: 0 for row in rows if row.group is not None}
+        self._parked: dict[str, _Run[ContextT]] = {}
+        self._guards: dict[str, bool] = {}
         self.registry = registry
         self._registered = rows
         self._policies = {row.id: row for row in rows}
-        self._ordered = tuple(sorted(rows, key=lambda row: -row.priority))
+        self._ordered = tuple(sorted(rows, key=lambda row: -self._priority(row)))
         self.max_pending = max_pending
         self._trace = NullTrace() if trace is None else trace
         if not callable(getattr(self._trace, "record", None)):
@@ -81,6 +130,15 @@ class PolicyScheduler(Generic[ContextT]):
                 "policies": [row.fingerprint for row in rows],
                 "max_pending": max_pending,
                 "registry": registry_fingerprint,
+                **(
+                    {
+                        "groups": {
+                            key: asdict(value) for key, value in self.groups.items()
+                        }
+                    }
+                    if self.groups
+                    else {}
+                ),
             }
         )
         self._pending: dict[str, list[Event]] = {row.id: [] for row in rows}
@@ -127,6 +185,7 @@ class PolicyScheduler(Generic[ContextT]):
                         self._active is not None
                         and self._active.policy.id == policy.id
                         and self._active.event.sequence is not None
+                        or policy.id in self._parked
                     )
                     if len(queues[policy.id]) + reserved >= self.max_pending:
                         raise ValueError(
@@ -169,8 +228,119 @@ class PolicyScheduler(Generic[ContextT]):
         return (
             policy.enabled
             and step >= self._ready[policy.id]
-            and (self._levels.get(policy.id, False) or bool(self._pending[policy.id]))
+            and (
+                self._levels.get(policy.id, False)
+                or bool(self._pending[policy.id])
+                or (
+                    policy.id in self._parked
+                    or self._active is not None
+                    and self._active.policy.id == policy.id
+                )
+                and policy.id not in self._levels
+            )
         )
+
+    def _priority(self, policy: CompiledPolicy[ContextT]) -> int:
+        return (
+            self.groups[policy.group].priority
+            if policy.group is not None
+            else policy.priority
+        )
+
+    def _rotate(self, policy: CompiledPolicy[ContextT]) -> None:
+        assert policy.group is not None
+        name = policy.group
+        members = self._members[name]
+        self._cursor[name] = (members.index(policy) + 1) % len(members)
+        self._used[name] = self._turn_steps[name] = 0
+
+    def _park(self, *, reason: str, rotate: bool = False) -> None:
+        run = self._active
+        assert run is not None and run.policy.group is not None
+        self._parked[run.policy.id] = run
+        self._active = None
+        if rotate:
+            self._rotate(run.policy)
+        self._record(
+            TraceEventName.POLICY_YIELDED,
+            policy=run.policy.id,
+            group=run.policy.group,
+            reason=reason,
+        )
+
+    def _candidates(
+        self, context: ContextT, step: int
+    ) -> tuple[CompiledPolicy[ContextT] | None, set[str]]:
+        eligible: set[str] = set()
+        evidence = []
+        for policy in self._registered:
+            ready = self._eligible(policy, step)
+            reason = (
+                "eligible" if ready else "disabled, released, empty or cooling down"
+            )
+            run = self._parked.get(policy.id)
+            if self._active is not None and self._active.policy.id == policy.id:
+                run = self._active
+            if ready and policy.eligible_when is not None:
+                event = (
+                    run.event
+                    if run
+                    else (
+                        self._pending[policy.id][0]
+                        if self._pending[policy.id]
+                        else self._level_event(policy)
+                    )
+                )
+                if policy.id not in self._guards:
+                    self._guards[policy.id] = (
+                        policy.eligible_when(Frame(context, event)) is True
+                    )
+                ready = self._guards[policy.id]
+                if not ready:
+                    reason = "eligibility condition false or unknown"
+            if ready:
+                eligible.add(policy.id)
+            evidence.append(
+                {
+                    "policy": policy.id,
+                    "group": policy.group,
+                    "weight": policy.weight,
+                    "priority": self._priority(policy),
+                    "eligible": ready,
+                    "reason": reason,
+                    "service": self._service.get(policy.id, 0),
+                    "ready_at": self._ready[policy.id],
+                }
+            )
+        group_choices = {}
+        for name, members in self._members.items():
+            group_choices[name] = next(
+                (
+                    members[(self._cursor[name] + offset) % len(members)].id
+                    for offset in range(len(members))
+                    if members[(self._cursor[name] + offset) % len(members)].id
+                    in eligible
+                ),
+                None,
+            )
+        candidate = next(
+            (
+                policy
+                for policy in self._ordered
+                if policy.id in eligible
+                and (policy.group is None or group_choices[policy.group] == policy.id)
+            ),
+            None,
+        )
+        if self.groups or any(
+            row.eligible_when is not None for row in self._registered
+        ):
+            self._record(
+                TraceEventName.POLICY_CANDIDATES,
+                candidates=evidence,
+                selected=candidate.id if candidate else None,
+            )
+        return candidate, eligible
 
     def _stop(self, context: ContextT, *, reason: str, requeue: bool) -> None:
         run = self._active
@@ -204,50 +374,106 @@ class PolicyScheduler(Generic[ContextT]):
         self._pending, self._sequence = queues, sequence
         try:
             self._poll_levels(context)
-            if (
-                self._active is not None
-                and self._active.policy.id in self._levels
-                and not self._levels[self._active.policy.id]
-            ):
-                self._stop(context, reason="event_released", requeue=False)
-            candidate = next(
-                (policy for policy in self._ordered if self._eligible(policy, step)),
-                None,
-            )
+            self._guards.clear()
+            candidate, eligible = self._candidates(context, step)
+            if self._active is not None and self._active.policy.id not in eligible:
+                if self._active.policy.group is not None:
+                    self._park(reason="eligibility_lost", rotate=True)
+                else:
+                    self._stop(context, reason="event_released", requeue=False)
+                candidate, _ = self._candidates(context, step)
             if (
                 self._active is not None
                 and candidate is not None
-                and candidate.priority > self._active.policy.priority
+                and self._priority(candidate) > self._priority(self._active.policy)
             ):
-                self._stop(context, reason="higher_priority", requeue=True)
+                if self._active.policy.group is not None:
+                    self._park(reason="higher_priority")
+                else:
+                    self._stop(context, reason="higher_priority", requeue=True)
             if self._active is None and candidate is not None:
-                event = (
-                    self._level_event(candidate)
-                    if candidate.id in self._levels
-                    else self._pending[candidate.id].pop(0)
-                )
-                self._active = _Run(candidate, candidate.tree.start(), event)
+                if candidate.group is not None:
+                    name = candidate.group
+                    cursor = self._members[name].index(candidate)
+                    if self._cursor[name] != cursor:
+                        self._cursor[name], self._used[name], self._turn_steps[name] = (
+                            cursor,
+                            0,
+                            0,
+                        )
+                parked = self._parked.pop(candidate.id, None)
+                if parked is not None:
+                    self._active = parked
+                    self._record(
+                        TraceEventName.POLICY_RESUMED,
+                        policy=candidate.id,
+                        group=candidate.group,
+                    )
+                else:
+                    event = (
+                        self._level_event(candidate)
+                        if candidate.id in self._levels
+                        else self._pending[candidate.id].pop(0)
+                    )
+                    self._active = _Run(candidate, candidate.tree.start(), event)
                 self._record(
                     TraceEventName.POLICY_SELECTED,
                     policy=candidate.id,
-                    priority=candidate.priority,
-                    event=candidate.event,
-                    event_sequence=event.sequence,
+                    priority=self._priority(candidate),
+                    event=self._active.event.name,
+                    event_sequence=self._active.event.sequence,
                 )
             run = self._active
             if run is None:
                 self._record(TraceEventName.POLICY_IDLE)
                 return PolicyTick(None, None)
-            result = run.execution.tick(Frame(context, run.event))
+            frame = Frame(context, run.event)
+            result = run.execution.tick(frame)
+            units = 1
+            if run.policy.group is not None:
+                units = self._work_units(frame) if self._work_units else 1
+                if type(units) is not int or not 0 <= units <= 1000000:
+                    raise ValueError(
+                        "work_units must return a nonnegative bounded integer"
+                    )
+                name = run.policy.group
+                self._used[name] += units
+                self._turn_steps[name] += 1
+                self._service[run.policy.id] += units
+                self._record(
+                    TraceEventName.POLICY_SERVICE,
+                    policy=run.policy.id,
+                    group=name,
+                    units=units,
+                    service=self._service[run.policy.id],
+                    turn_units=self._used[name],
+                )
             if result != Status.RUNNING:
                 self._ready[run.policy.id] = step + run.policy.cooldown_steps + 1
                 self._active = None
+                if run.policy.group is not None and result == Status.FAILURE:
+                    self._ready[run.policy.id] = max(
+                        self._ready[run.policy.id],
+                        step + self.groups[run.policy.group].failure_backoff_steps + 1,
+                    )
                 self._record(
                     TraceEventName.POLICY_FINISHED,
                     policy=run.policy.id,
                     status=result.value,
                     ready_at=self._ready[run.policy.id],
                 )
+            if run.policy.group is not None:
+                name = run.policy.group
+                quota = self.groups[name].quantum_steps * run.policy.weight
+                if (
+                    result == Status.FAILURE
+                    or (result != Status.RUNNING and units == 0)
+                    or max(self._used[name], self._turn_steps[name]) >= quota
+                ):
+                    if self._active is not None:
+                        self._park(reason="quantum_exhausted", rotate=True)
+                    else:
+                        self._rotate(run.policy)
             return PolicyTick(run.policy.id, result, run.event.sequence)
         except BaseException:
             self._faulted = True
@@ -267,6 +493,9 @@ class PolicyScheduler(Generic[ContextT]):
         self._busy = True
         try:
             self._stop(context, reason="explicit_cancel", requeue=False)
+            for run in self._parked.values():
+                run.execution.cancel(Frame(context, run.event))
+            self._parked.clear()
             self._record(TraceEventName.POLICY_CANCELLED)
             self._faulted = False
         except BaseException:
@@ -291,7 +520,27 @@ class PolicyScheduler(Generic[ContextT]):
             dict[str, Any],
             _json_copy(
                 {
-                    "version": 1,
+                    "version": 2 if self.groups else 1,
+                    **(
+                        {
+                            "work": {
+                                "cursor": self._cursor,
+                                "used": self._used,
+                                "turn_steps": self._turn_steps,
+                                "service": self._service,
+                                "parked": {
+                                    key: {
+                                        "policy": run.policy.id,
+                                        "event": self._event_data(run.event),
+                                        "execution": run.execution.snapshot(),
+                                    }
+                                    for key, run in self._parked.items()
+                                },
+                            }
+                        }
+                        if self.groups
+                        else {}
+                    ),
                     "scheduler": self.fingerprint,
                     "last_step": self._last_step,
                     "sequence": self._sequence,
@@ -321,9 +570,56 @@ class PolicyScheduler(Generic[ContextT]):
         *,
         max_pending: int = 64,
         trace: TraceSink | None = None,
+        groups: Mapping[str, WorkGroup] | None = None,
+        work_units: Callable[[Frame[ContextT]], int] | None = None,
     ) -> PolicyScheduler[ContextT]:
-        scheduler = cls(registry, policies, max_pending=max_pending, trace=trace)
+        scheduler = cls(
+            registry,
+            policies,
+            max_pending=max_pending,
+            trace=trace,
+            groups=groups,
+            work_units=work_units,
+        )
         state = _json_copy(dict(data))
+        fair = None
+        if scheduler.groups:
+            if type(state.get("version")) is not int or state["version"] != 2:
+                raise ValueError("Incompatible work-group checkpoint")
+            fair = state.pop("work", None)
+            state["version"] = 1
+            if (
+                type(fair) is not dict
+                or set(fair) != {"cursor", "used", "turn_steps", "service", "parked"}
+                or type(fair["parked"]) is not dict
+            ):
+                raise ValueError("Invalid work-group state")
+            for key in ("cursor", "used", "turn_steps", "service"):
+                expected_keys = (
+                    scheduler._service if key == "service" else scheduler.groups
+                )
+                if (
+                    type(fair[key]) is not dict
+                    or set(fair[key]) != set(expected_keys)
+                    or any(
+                        type(value) is not int or value < 0
+                        for value in fair[key].values()
+                    )
+                ):
+                    raise ValueError("Invalid work-group accounting")
+            for name, members in scheduler._members.items():
+                cursor = fair["cursor"][name]
+                if (
+                    cursor >= len(members)
+                    or max(fair["used"][name], fair["turn_steps"][name])
+                    >= scheduler.groups[name].quantum_steps * members[cursor].weight
+                ):
+                    raise ValueError("Invalid work turn")
+            scheduler._cursor, scheduler._used = fair["cursor"], fair["used"]
+            scheduler._turn_steps, scheduler._service = (
+                fair["turn_steps"],
+                fair["service"],
+            )
         if (
             set(state)
             != {
@@ -394,8 +690,8 @@ class PolicyScheduler(Generic[ContextT]):
                 previous = event.sequence
                 remember(event)
             queues[identity] = decoded
-        active = state["active"]
-        if active is not None:
+
+        def restore_run(active: Any, *, parked: bool = False) -> _Run[ContextT]:
             if (
                 type(active) is not dict
                 or set(active) != {"policy", "event", "execution"}
@@ -412,9 +708,9 @@ class PolicyScheduler(Generic[ContextT]):
             if event.name != policy.event:
                 raise ValueError("Wrong active event context")
             if policy.id in scheduler._levels:
-                if not state["levels"][policy.id] or dict(event.payload) != dict(
-                    policy.event_parameters
-                ):
+                if (not parked and not state["levels"][policy.id]) or dict(
+                    event.payload
+                ) != dict(policy.event_parameters):
                     raise ValueError(
                         "Active level event is not latched or has wrong parameters"
                     )
@@ -429,7 +725,37 @@ class PolicyScheduler(Generic[ContextT]):
             execution = Execution.restore(policy.tree, active["execution"])
             if execution.snapshot()["active"] is None:
                 raise ValueError("Active policy must contain running work")
-            scheduler._active = _Run(policy, execution, event)
+            return _Run(policy, execution, event)
+
+        active = state["active"]
+        if active is not None:
+            scheduler._active = restore_run(active)
+        if fair is not None:
+            for identity, saved in fair["parked"].items():
+                if (
+                    identity not in scheduler._service
+                    or identity
+                    == (scheduler._active.policy.id if scheduler._active else None)
+                    or type(saved) is not dict
+                    or saved.get("policy") != identity
+                ):
+                    raise ValueError("Invalid parked work identity")
+                scheduler._parked[identity] = restore_run(saved, parked=True)
+        if fair is not None:
+            for name, members in scheduler._members.items():
+                owner = members[scheduler._cursor[name]]
+                if scheduler._used[name] > scheduler._service[owner.id]:
+                    raise ValueError("Turn service exceeds total service")
+            if (
+                scheduler._active is not None
+                and scheduler._active.policy.group is not None
+            ):
+                group = scheduler._active.policy.group
+                if (
+                    scheduler._members[group][scheduler._cursor[group]].id
+                    != scheduler._active.policy.id
+                ):
+                    raise ValueError("Active work disagrees with turn cursor")
         if any(
             not scheduler._policies[identity].enabled and value
             for identity, value in state["levels"].items()
@@ -441,6 +767,11 @@ class PolicyScheduler(Generic[ContextT]):
             or any(queues.values())
             or any(state["levels"].values())
             or any(state["ready"].values())
+            or bool(scheduler._parked)
+            or any(scheduler._service.values())
+            or any(scheduler._used.values())
+            or any(scheduler._turn_steps.values())
+            or any(scheduler._cursor.values())
         ):
             raise ValueError("Unstarted scheduler contains progress")
         scheduler._pending = queues
