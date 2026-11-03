@@ -30,13 +30,6 @@ python -m pip install -e '.[dev]'
 pytest
 ```
 
-## Complete application example
-
-[Agent Stranded](https://github.com/Brilberry/agentstranded) is a more complete
-example: an autonomous survival game using bbagents planning, tools, memory,
-skills, communication, and tracing, with an optional local LLM. Its code,
-documentation, and run instructions live in that separate repository.
-
 ## Features
 
 - Typed tools, dependency-checked plans, structured model decisions and validation.
